@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer as createViteServer } from 'vite'
+import { hash, verify } from '@node-rs/argon2'
 
 const scrypt = promisify(scryptCallback)
 const app = express()
@@ -17,6 +18,7 @@ const answerPepper = process.env.ANSWER_PEPPER ?? 'sturrl-development-only-chang
 const subjects = ['국어', '영어', '수학', '사회', '과학', '한국사']
 const grades = ['중1', '중2', '중3', '고1', '고2', '고3', '대학생']
 const difficulties = [1, 2, 3, 4, 5]
+const argon2Options = { algorithm: 2, memoryCost: 19456, timeCost: 2, parallelism: 1 } as const
 
 type Problem = {
   id: string
@@ -32,6 +34,7 @@ type Problem = {
   correctSubmissions: number
   answerSalt: string
   answerVerifier: string
+  managementPasswordHash?: string
   explanation: { iv: string; tag: string; ciphertext: string }
 }
 type Store = { problems: Problem[] }
@@ -72,13 +75,37 @@ async function deriveKeys(answer: string, salt: Buffer) {
 }
 
 function publicProblem(problem: Problem) {
-  const { answerSalt: _salt, answerVerifier: _verifier, explanation: _explanation, solvedBy, ...safe } = problem
+  const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, ...safe } = problem
   return { ...safe, solvedCount: solvedBy.length }
 }
 
 async function persist() {
   writeQueue = writeQueue.then(() => writeFile(dataFile, JSON.stringify(store, null, 2), 'utf8'))
   await writeQueue
+}
+
+function validProblemFields(body: any) {
+  const { title, description, subject, grade, difficulty, author, answer, explanation } = body ?? {}
+  return typeof title === 'string' && title.trim().length >= 3 && title.trim().length <= 120 &&
+    typeof description === 'string' && description.trim().length >= 5 && description.trim().length <= 5000 &&
+    subjects.includes(subject) && grades.includes(grade) && difficulties.includes(Number(difficulty)) &&
+    typeof author === 'string' && author.trim().length > 0 && author.trim().length <= 30 &&
+    typeof answer === 'string' && answer.trim().length > 0 && answer.trim().length <= 200 &&
+    typeof explanation === 'string' && explanation.trim().length > 0 && explanation.trim().length <= 10000
+}
+
+async function buildAnswerMaterial(answer: string, explanation: string) {
+  const answerSalt = randomBytes(16)
+  const keys = await deriveKeys(answer, answerSalt)
+  const answerVerifier = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', keys.subarray(0, 32), iv)
+  const ciphertext = Buffer.concat([cipher.update(explanation, 'utf8'), cipher.final()])
+  return {
+    answerSalt: answerSalt.toString('base64'),
+    answerVerifier: answerVerifier.toString('base64'),
+    explanation: { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') },
+  }
 }
 
 app.get('/server/health', (_req: Request, res: Response) => {
@@ -92,12 +119,9 @@ app.get('/server/problems', (req: Request, res: Response) => {
   const difficultyFilter = typeof difficulty === 'string' ? difficulty : ''
   const sortBy = typeof sort === 'string' ? sort : 'newest'
   const query = typeof q === 'string' ? q.toLocaleLowerCase('ko-KR') : ''
-  let items = store.problems.filter((problem) => {
-    return (!subjectFilter || problem.subject === subjectFilter) &&
-      (!gradeFilter || problem.grade === gradeFilter) &&
-      (!difficultyFilter || problem.difficulty === Number(difficultyFilter)) &&
-      (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query))
-  })
+  let items = store.problems.filter((problem) => (!subjectFilter || problem.subject === subjectFilter) &&
+    (!gradeFilter || problem.grade === gradeFilter) && (!difficultyFilter || problem.difficulty === Number(difficultyFilter)) &&
+    (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query)))
   items = [...items].sort((a, b) => {
     if (sortBy === 'views') return b.views - a.views
     if (sortBy === 'solved') return b.solvedBy.length - a.solvedBy.length
@@ -109,40 +133,17 @@ app.get('/server/problems', (req: Request, res: Response) => {
 })
 
 app.post('/server/problems', async (req: Request, res: Response) => {
-  const { title, description, subject, grade, difficulty, author, answer, explanation } = req.body ?? {}
-  if (
-    typeof title !== 'string' || title.trim().length < 3 || title.trim().length > 120 ||
-    typeof description !== 'string' || description.trim().length < 5 || description.trim().length > 5000 ||
-    !subjects.includes(subject) || !grades.includes(grade) || !difficulties.includes(Number(difficulty)) ||
-    typeof author !== 'string' || author.trim().length === 0 || author.trim().length > 30 ||
-    typeof answer !== 'string' || answer.trim().length < 1 || answer.trim().length > 200 ||
-    typeof explanation !== 'string' || explanation.trim().length < 1 || explanation.trim().length > 10000
-  ) {
-    res.status(400).json({ error: '문제 정보, 분류, 정답, 해설을 올바르게 입력해 주세요.' })
+  const { title, description, subject, grade, difficulty, author, answer, explanation, managementPassword } = req.body ?? {}
+  if (!validProblemFields(req.body) || typeof managementPassword !== 'string' || managementPassword.length < 8 || managementPassword.length > 256) {
+    res.status(400).json({ error: '문제 정보와 관리 암호(8자 이상)를 올바르게 입력해 주세요.' })
     return
   }
-
-  const answerSalt = randomBytes(16)
-  const keys = await deriveKeys(answer, answerSalt)
-  const answerVerifier = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
-  const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', keys.subarray(0, 32), iv)
-  const ciphertext = Buffer.concat([cipher.update(explanation, 'utf8'), cipher.final()])
+  const answerMaterial = await buildAnswerMaterial(answer, explanation)
+  const managementPasswordHash = await hash(managementPassword, argon2Options)
   const problem: Problem = {
-    id: randomBytes(12).toString('hex'),
-    title: title.trim(),
-    description: description.trim(),
-    subject,
-    grade,
-    difficulty: Number(difficulty),
-    author: author.trim(),
-    createdAt: new Date().toISOString(),
-    views: 0,
-    solvedBy: [],
-    correctSubmissions: 0,
-    answerSalt: answerSalt.toString('base64'),
-    answerVerifier: answerVerifier.toString('base64'),
-    explanation: { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') },
+    id: randomBytes(12).toString('hex'), title: title.trim(), description: description.trim(), subject, grade,
+    difficulty: Number(difficulty), author: author.trim(), createdAt: new Date().toISOString(), views: 0,
+    solvedBy: [], correctSubmissions: 0, ...answerMaterial, managementPasswordHash,
   }
   store.problems.unshift(problem)
   await persist()
@@ -163,25 +164,55 @@ app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
   if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
   const answer = req.body?.answer
   if (typeof answer !== 'string' || answer.length > 200) { res.status(400).json({ error: '정답을 입력해 주세요.' }); return }
-
   const keys = await deriveKeys(answer, Buffer.from(problem.answerSalt, 'base64'))
   const candidate = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
   const expected = Buffer.from(problem.answerVerifier, 'base64')
   const correct = candidate.length === expected.length && timingSafeEqual(candidate, expected)
   if (!correct) { res.json({ correct: false, error: '정답이 아닙니다. 다시 생각해 보세요.' }); return }
-
   problem.correctSubmissions += 1
   const visitorId = getVisitorId(req, res)
   if (!problem.solvedBy.includes(visitorId)) problem.solvedBy.push(visitorId)
   const encrypted = problem.explanation
   const decipher = createDecipheriv('aes-256-gcm', keys.subarray(0, 32), Buffer.from(encrypted.iv, 'base64'))
   decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'))
-  const explanation = Buffer.concat([
-    decipher.update(Buffer.from(encrypted.ciphertext, 'base64')),
-    decipher.final(),
-  ]).toString('utf8')
+  const explanation = Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, 'base64')), decipher.final()]).toString('utf8')
   await persist()
   res.json({ correct: true, explanation, solvedCount: problem.solvedBy.length, correctSubmissions: problem.correctSubmissions })
+})
+
+async function authorizeManagement(problem: Problem, password: unknown) {
+  if (typeof password !== 'string' || password.length < 1 || password.length > 256 || !problem.managementPasswordHash) return false
+  try { return await verify(problem.managementPasswordHash, password) } catch { return false }
+}
+
+app.put('/server/problems/:id', async (req: Request, res: Response) => {
+  const problem = store.problems.find((item) => item.id === req.params.id)
+  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
+  if (!await authorizeManagement(problem, req.body?.managementPassword)) {
+    res.status(403).json({ error: '관리 암호가 올바르지 않습니다.' }); return
+  }
+  const { title, description, subject, grade, difficulty, author, answer, explanation } = req.body ?? {}
+  if (!validProblemFields(req.body)) {
+    res.status(400).json({ error: '수정할 문제 정보, 정답, 해설을 올바르게 입력해 주세요.' }); return
+  }
+  const answerMaterial = await buildAnswerMaterial(answer, explanation)
+  Object.assign(problem, {
+    title: title.trim(), description: description.trim(), subject, grade, difficulty: Number(difficulty),
+    author: author.trim(), ...answerMaterial, updatedAt: new Date().toISOString(),
+  })
+  await persist()
+  res.json({ item: publicProblem(problem) })
+})
+
+app.delete('/server/problems/:id', async (req: Request, res: Response) => {
+  const problem = store.problems.find((item) => item.id === req.params.id)
+  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
+  if (!await authorizeManagement(problem, req.body?.managementPassword)) {
+    res.status(403).json({ error: '관리 암호가 올바르지 않습니다.' }); return
+  }
+  store.problems = store.problems.filter((item) => item.id !== problem.id)
+  await persist()
+  res.status(204).end()
 })
 
 async function start() {
@@ -192,11 +223,7 @@ async function start() {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     await persist()
   }
-
-  if (process.env.ANSWER_PEPPER === undefined) {
-    console.warn('[Sturrl] ANSWER_PEPPER is not set; using development fallback. Set a strong secret in production.')
-  }
-
+  if (process.env.ANSWER_PEPPER === undefined) console.warn('[Sturrl] ANSWER_PEPPER is not set; using development fallback. Set a strong secret in production.')
   if (isProduction) {
     const clientDir = resolve(rootDir, 'dist')
     app.use(express.static(clientDir))
@@ -205,15 +232,10 @@ async function start() {
     const vite = await createViteServer({ configFile: resolve(rootDir, 'vite.config.ts'), root: rootDir, server: { middlewareMode: true }, appType: 'spa' })
     app.use(vite.middlewares)
   }
-
   app.listen(port, '0.0.0.0', () => {
     console.log(`[Sturrl] Server ready at http://localhost:${port}`)
     console.log(`[Sturrl] API available at http://localhost:${port}/server/`)
     if (!isProduction) console.log('[Sturrl] Vite HMR enabled')
   })
 }
-
-start().catch((error: unknown) => {
-  console.error('[Sturrl] Failed to start:', error)
-  process.exit(1)
-})
+start().catch((error: unknown) => { console.error('[Sturrl] Failed to start:', error); process.exit(1) })
