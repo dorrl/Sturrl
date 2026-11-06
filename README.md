@@ -26,6 +26,12 @@ npm start
 - `ANSWER_PEPPER`: 정답 검증 및 해설 키 파생에 사용하는 서버 비밀값. 운영 환경에서는 반드시 충분히 긴 무작위 값으로 설정하고, 변경하거나 분실하면 기존 문제의 정답 검증/해설 복호화가 불가능해집니다.
 - `MASTER_PASSWORD_HASH`: 모든 문제를 수정·삭제할 수 있는 운영자 마스터 암호의 Argon2id PHC 해시. 평문 암호가 아닌 해시만 환경 변수에 설정하세요.
 
+## 문제 사진
+- 문제마다 사진을 최대 5장까지 첨부할 수 있습니다.
+- 원본 사진은 장당 100MB 미만이어야 하며, 브라우저에서 긴 변 최대 1920px의 WebP 이미지로 자동 압축한 뒤 저장합니다.
+- 압축된 사진은 장당 약 3.15MB 이하로 제한되며, 목록에는 작은 썸네일, 상세 화면에는 사진 갤러리로 표시됩니다.
+- 사진이 없는 기존 문제 데이터도 그대로 호환됩니다.
+
 ## 문제 분류
 - 과목: 국어, 영어, 수학, 사회, 과학, 한국사
 - 학년: 중1, 중2, 중3, 고1, 고2, 고3, 대학생
@@ -43,10 +49,10 @@ node --input-type=module -e "import { hash } from '@node-rs/argon2'; console.log
 ## API
 - `GET /server/health`
 - `GET /server/problems` — `subject`, `grade`, `difficulty`는 반복 쿼리 파라미터로 복수 선택(OR) 가능하며, 분류 간에는 AND로 적용됩니다. `sort`, `q`도 지원합니다.
-- `POST /server/problems` — 문제, 정답, 해설, 관리 암호 등록
+- `POST /server/problems` — 문제, 정답, 해설, 관리 암호 및 선택 사진(최대 5장) 등록
 - `GET /server/problems/:id` — 문제 상세 및 조회수 증가
 - `POST /server/problems/:id/answer` — 정답 검증 후 맞으면 해설 반환
-- `PUT /server/problems/:id` — `managementPassword` 검증 후 문제 수정
+- `PUT /server/problems/:id` — `managementPassword` 검증 후 문제 수정(사진 포함)
 - `DELETE /server/problems/:id` — JSON body의 `managementPassword` 검증 후 삭제
 
 ## 보안과 통계 메모

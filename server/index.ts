@@ -35,6 +35,7 @@ type Problem = {
   answerSalt: string
   answerVerifier: string
   managementPasswordHash?: string
+  photos?: string[]
   explanation: { iv: string; tag: string; ciphertext: string }
 }
 type Store = { problems: Problem[] }
@@ -43,7 +44,7 @@ let writeQueue = Promise.resolve()
 const attempts = new Map<string, { count: number; resetAt: number }>()
 
 app.disable('x-powered-by')
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: '25mb' }))
 
 function getVisitorId(req: Request, res: Response) {
   const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('sturrl_visitor='))
@@ -84,6 +85,13 @@ async function persist() {
   await writeQueue
 }
 
+function validPhotos(value: unknown) {
+  if (value === undefined) return true
+  return Array.isArray(value) && value.length <= 5 && value.every((photo) =>
+    typeof photo === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/.test(photo) && photo.length <= 4_200_000,
+  )
+}
+
 function validProblemFields(body: any) {
   const { title, description, subject, grade, difficulty, author, answer, explanation } = body ?? {}
   return typeof title === 'string' && title.trim().length >= 3 && title.trim().length <= 120 &&
@@ -91,7 +99,7 @@ function validProblemFields(body: any) {
     subjects.includes(subject) && grades.includes(grade) && difficulties.includes(Number(difficulty)) &&
     typeof author === 'string' && author.trim().length > 0 && author.trim().length <= 30 &&
     typeof answer === 'string' && answer.trim().length > 0 && answer.trim().length <= 200 &&
-    typeof explanation === 'string' && explanation.trim().length > 0 && explanation.trim().length <= 10000
+    typeof explanation === 'string' && explanation.trim().length > 0 && explanation.trim().length <= 10000 && validPhotos(body?.photos)
 }
 
 async function buildAnswerMaterial(answer: string, explanation: string) {
@@ -135,7 +143,7 @@ app.get('/server/problems', (req: Request, res: Response) => {
 })
 
 app.post('/server/problems', async (req: Request, res: Response) => {
-  const { title, description, subject, grade, difficulty, author, answer, explanation, managementPassword } = req.body ?? {}
+  const { title, description, subject, grade, difficulty, author, answer, explanation, managementPassword, photos } = req.body ?? {}
   if (!validProblemFields(req.body) || typeof managementPassword !== 'string' || managementPassword.length < 8 || managementPassword.length > 256) {
     res.status(400).json({ error: '문제 정보와 관리 암호(8자 이상)를 올바르게 입력해 주세요.' })
     return
@@ -145,7 +153,7 @@ app.post('/server/problems', async (req: Request, res: Response) => {
   const problem: Problem = {
     id: randomBytes(12).toString('hex'), title: title.trim(), description: description.trim(), subject, grade,
     difficulty: Number(difficulty), author: author.trim(), createdAt: new Date().toISOString(), views: 0,
-    solvedBy: [], correctSubmissions: 0, ...answerMaterial, managementPasswordHash,
+    solvedBy: [], correctSubmissions: 0, ...answerMaterial, managementPasswordHash, photos: photos ?? [],
   }
   store.problems.unshift(problem)
   await persist()
@@ -211,7 +219,7 @@ app.put('/server/problems/:id', async (req: Request, res: Response) => {
   const answerMaterial = await buildAnswerMaterial(answer, explanation)
   Object.assign(problem, {
     title: title.trim(), description: description.trim(), subject, grade, difficulty: Number(difficulty),
-    author: author.trim(), ...answerMaterial, updatedAt: new Date().toISOString(),
+    author: author.trim(), ...answerMaterial, photos: req.body.photos ?? problem.photos ?? [], updatedAt: new Date().toISOString(),
   })
   await persist()
   res.json({ item: publicProblem(problem) })
