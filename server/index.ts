@@ -114,13 +114,15 @@ app.get('/server/health', (_req: Request, res: Response) => {
 
 app.get('/server/problems', (req: Request, res: Response) => {
   const { subject, grade, difficulty, sort = 'newest', q = '' } = req.query
-  const subjectFilter = typeof subject === 'string' ? subject : ''
-  const gradeFilter = typeof grade === 'string' ? grade : ''
-  const difficultyFilter = typeof difficulty === 'string' ? difficulty : ''
+  const toFilterList = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value])
+    .filter((item): item is string => typeof item === 'string' && item.length > 0)
+  const subjectFilters = toFilterList(subject)
+  const gradeFilters = toFilterList(grade)
+  const difficultyFilters = toFilterList(difficulty).map(Number).filter((item) => difficulties.includes(item))
   const sortBy = typeof sort === 'string' ? sort : 'newest'
   const query = typeof q === 'string' ? q.toLocaleLowerCase('ko-KR') : ''
-  let items = store.problems.filter((problem) => (!subjectFilter || problem.subject === subjectFilter) &&
-    (!gradeFilter || problem.grade === gradeFilter) && (!difficultyFilter || problem.difficulty === Number(difficultyFilter)) &&
+  let items = store.problems.filter((problem) => (!subjectFilters.length || subjectFilters.includes(problem.subject)) &&
+    (!gradeFilters.length || gradeFilters.includes(problem.grade)) && (!difficultyFilters.length || difficultyFilters.includes(problem.difficulty)) &&
     (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query)))
   items = [...items].sort((a, b) => {
     if (sortBy === 'views') return b.views - a.views
@@ -181,7 +183,18 @@ app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
 })
 
 async function authorizeManagement(problem: Problem, password: unknown) {
-  if (typeof password !== 'string' || password.length < 1 || password.length > 256 || !problem.managementPasswordHash) return false
+  if (typeof password !== 'string' || password.length < 1 || password.length > 256) return false
+
+  const masterPasswordHash = process.env.MASTER_PASSWORD_HASH
+  if (masterPasswordHash) {
+    try {
+      if (await verify(masterPasswordHash, password)) return true
+    } catch {
+      // An invalid master hash must not prevent the problem-specific password check.
+    }
+  }
+
+  if (!problem.managementPasswordHash) return false
   try { return await verify(problem.managementPasswordHash, password) } catch { return false }
 }
 

@@ -19,9 +19,10 @@ function timeAgo(value: string) {
 
 function App() {
   const [problems, setProblems] = useState<Problem[]>([])
-  const [subject, setSubject] = useState('')
-  const [grade, setGrade] = useState('')
-  const [difficulty, setDifficulty] = useState('')
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([])
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([])
+  const [selectedDifficulties, setSelectedDifficulties] = useState<string[]>([])
+  const [darkMode, setDarkMode] = useState(false)
   const [sort, setSort] = useState<Sort>('newest')
   const [search, setSearch] = useState('')
   const [showComposer, setShowComposer] = useState(false)
@@ -48,9 +49,9 @@ function App() {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      if (subject) params.set('subject', subject)
-      if (grade) params.set('grade', grade)
-      if (difficulty) params.set('difficulty', difficulty)
+      selectedSubjects.forEach((value) => params.append('subject', value))
+      selectedGrades.forEach((value) => params.append('grade', value))
+      selectedDifficulties.forEach((value) => params.append('difficulty', value))
       if (sort) params.set('sort', sort)
       if (search.trim()) params.set('q', search.trim())
       const response = await fetch(`/server/problems?${params}`)
@@ -61,7 +62,18 @@ function App() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : '서버에 연결할 수 없습니다.') }
     finally { setLoading(false) }
   }
-  useEffect(() => { void loadProblems() }, [subject, grade, difficulty, sort, search])
+  useEffect(() => { void loadProblems() }, [selectedSubjects, selectedGrades, selectedDifficulties, sort, search])
+  useEffect(() => {
+    setDarkMode(window.localStorage.getItem('sturrl-theme') === 'dark')
+  }, [])
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
+    window.localStorage.setItem('sturrl-theme', darkMode ? 'dark' : 'light')
+  }, [darkMode])
+
+  function toggleFilter(values: string[], value: string, setter: (next: string[]) => void) {
+    setter(values.includes(value) ? values.filter((item) => item !== value) : [...values, value])
+  }
   const totalSolved = useMemo(() => problems.reduce((sum, item) => sum + item.solvedCount, 0), [problems])
 
   function clearComposer() {
@@ -138,7 +150,7 @@ function App() {
 
   async function deleteProblem() {
     if (!selected) return
-    const password = window.prompt('문제 등록 시 설정한 관리 암호를 입력하세요.')
+    const password = window.prompt('문제 관리 암호 또는 마스터 암호를 입력하세요.')
     if (password === null) return
     setSubmitting(true); setAnswerError('')
     try {
@@ -157,11 +169,11 @@ function App() {
   const problemFields = <><label>문제 제목<input required minLength={3} maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="문제를 한 문장으로 표현해 주세요" /></label><label>문제 내용<textarea required minLength={5} maxLength={5000} rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="문제의 조건과 질문을 자세히 적어주세요." /></label><div className="form-row"><label>과목<select value={newSubject} onChange={(event) => setNewSubject(event.target.value)}>{subjects.map((item) => <option key={item}>{item}</option>)}</select></label><label>학년<select value={newGrade} onChange={(event) => setNewGrade(event.target.value)}>{grades.map((item) => <option key={item}>{item}</option>)}</select></label></div><div className="form-row"><label>난이도<select value={newDifficulty} onChange={(event) => setNewDifficulty(event.target.value)}>{[1,2,3,4,5].map((item) => <option key={item} value={item}>{item} / 5</option>)}</select></label><label>작성자<input required maxLength={30} value={author} onChange={(event) => setAuthor(event.target.value)} /></label></div><label>정답<input required maxLength={200} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="정답을 입력하세요 (공개되지 않아요)" /></label><label>해설<textarea required maxLength={10000} rows={5} value={explanation} onChange={(event) => setExplanation(event.target.value)} placeholder="정답을 맞힌 사람에게 공개할 해설을 입력하세요." /></label></>
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${darkMode ? ' dark-mode' : ''}`}>
       <header className="topbar">
         <a className="brand" href="/" aria-label="Sturrl 홈"><span className="brand-mark">S</span>sturrl<span className="brand-dot">.</span></a>
         <nav className="top-links"><a className="active" href="#problems">문제 둘러보기</a><a href="#about">서비스 소개</a></nav>
-        <button className="profile-button" type="button" onClick={() => setShowComposer(true)}>문제 공유하기 <span>＋</span></button>
+        <div className="header-actions"><button className="theme-toggle" type="button" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? '라이트 모드로 전환' : '다크 모드로 전환'}>{darkMode ? '☀ 라이트 모드' : '☾ 다크 모드'}</button><button className="profile-button" type="button" onClick={() => setShowComposer(true)}>문제 공유하기 <span>＋</span></button></div>
       </header>
       <main>
         <section className="hero">
@@ -172,9 +184,10 @@ function App() {
         <section className="problem-section" id="problems">
           <div className="section-heading"><div><span className="section-kicker">COMMUNITY</span><h2>문제 둘러보기</h2><p>과목, 학년, 난이도를 골라 원하는 문제를 찾아보세요.</p></div><button className="text-button" type="button" onClick={() => setShowComposer(true)}>문제 작성하기 <span>↗</span></button></div>
           <div className="filter-panel">
-            <div className="filter-line"><span className="filter-label">과목</span><div className="filter-options"><button className={!subject ? 'chosen' : ''} onClick={() => setSubject('')}>전체</button>{subjects.map((item) => <button key={item} className={subject === item ? 'chosen' : ''} onClick={() => setSubject(item)}>{item}</button>)}</div></div>
-            <div className="filter-line"><span className="filter-label">학년</span><div className="filter-options"><button className={!grade ? 'chosen' : ''} onClick={() => setGrade('')}>전체</button>{grades.map((item) => <button key={item} className={grade === item ? 'chosen' : ''} onClick={() => setGrade(item)}>{item}</button>)}</div></div>
-            <div className="filter-line"><span className="filter-label">난이도</span><div className="filter-options"><button className={!difficulty ? 'chosen' : ''} onClick={() => setDifficulty('')}>전체</button>{[1,2,3,4,5].map((item) => <button key={item} className={difficulty === String(item) ? 'chosen' : ''} onClick={() => setDifficulty(String(item))}>{'★'.repeat(item)}</button>)}</div></div>
+            <div className="filter-line"><span className="filter-label">과목</span><div className="filter-options"><button type="button" className={selectedSubjects.length === 0 ? 'chosen' : ''} onClick={() => setSelectedSubjects([])}>전체</button>{subjects.map((item) => <button type="button" key={item} aria-pressed={selectedSubjects.includes(item)} className={selectedSubjects.includes(item) ? 'chosen' : ''} onClick={() => toggleFilter(selectedSubjects, item, setSelectedSubjects)}>{item}</button>)}</div></div>
+            <div className="filter-line"><span className="filter-label">학년</span><div className="filter-options"><button type="button" className={selectedGrades.length === 0 ? 'chosen' : ''} onClick={() => setSelectedGrades([])}>전체</button>{grades.map((item) => <button type="button" key={item} aria-pressed={selectedGrades.includes(item)} className={selectedGrades.includes(item) ? 'chosen' : ''} onClick={() => toggleFilter(selectedGrades, item, setSelectedGrades)}>{item}</button>)}</div></div>
+            <div className="filter-line"><span className="filter-label">난이도</span><div className="filter-options"><button type="button" className={selectedDifficulties.length === 0 ? 'chosen' : ''} onClick={() => setSelectedDifficulties([])}>전체</button>{[1,2,3,4,5].map((item) => <button type="button" key={item} aria-pressed={selectedDifficulties.includes(String(item))} className={selectedDifficulties.includes(String(item)) ? 'chosen' : ''} onClick={() => toggleFilter(selectedDifficulties, String(item), setSelectedDifficulties)}>{'★'.repeat(item)}</button>)}</div></div>
+            <div className="filter-help">각 분류에서 여러 개를 선택하면 선택한 항목 중 하나라도 일치하는 문제를 보여줘요.</div>
           </div>
           <div className="toolbar"><div className="result-count">총 <b>{problems.length}</b>개의 문제</div><div className="toolbar-right"><label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="문제 검색하기" /></label><select className="sort-select" value={sort} onChange={(event) => setSort(event.target.value as Sort)}>{Object.entries(sortLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div></div>
           {error && <div className="notice" role="status">{error}</div>}
@@ -184,10 +197,10 @@ function App() {
       </main>
       <footer><a className="brand footer-brand" href="/"><span className="brand-mark">S</span>sturrl<span className="brand-dot">.</span></a><span>Share what you wonder. Solve it together.</span><span>© 2026 Sturrl</span></footer>
 
-      {showComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) clearComposer() }}><section className="composer" role="dialog" aria-modal="true" aria-labelledby="composer-title"><div className="composer-heading"><div><span className="section-kicker">SHARE YOUR QUESTION</span><h2 id="composer-title">문제와 해설을 공유해요</h2></div><button className="close-button" type="button" onClick={clearComposer} aria-label="닫기">×</button></div><form onSubmit={submitProblem}>{problemFields}<label>문제 관리 암호<input required minLength={8} maxLength={256} type="password" autoComplete="new-password" value={managementPassword} onChange={(event) => setManagementPassword(event.target.value)} placeholder="수정·삭제에 사용할 암호 (8자 이상)" /></label><p className="form-hint">관리 암호는 Argon2id로 해싱해 저장하며, 잊어버리면 문제를 수정하거나 삭제할 수 없어요.</p><button className="submit-button" type="submit">문제 공유하기 <span>↗</span></button></form></section></div>}
+      {showComposer && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) clearComposer() }}><section className="composer" role="dialog" aria-modal="true" aria-labelledby="composer-title"><div className="composer-heading"><div><span className="section-kicker">SHARE YOUR QUESTION</span><h2 id="composer-title">문제와 해설을 공유해요</h2></div><button className="close-button" type="button" onClick={clearComposer} aria-label="닫기">×</button></div><form onSubmit={submitProblem}>{problemFields}<label>문제 관리 암호<input required minLength={8} maxLength={256} type="password" autoComplete="new-password" value={managementPassword} onChange={(event) => setManagementPassword(event.target.value)} placeholder="수정·삭제에 사용할 암호 (8자 이상)" /></label><p className="form-hint">관리 암호는 Argon2id로 해싱해 저장됩니다. 마스터 암호는 운영자가 서버 환경 변수로 별도 설정합니다.</p><button className="submit-button" type="submit">문제 공유하기 <span>↗</span></button></form></section></div>}
 
       {selected && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null) }}><section className="composer detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div className="composer-heading"><div><span className="section-kicker">{selected.subject} · {selected.grade} · 난이도 {selected.difficulty}/5</span><h2 id="detail-title">{selected.title}</h2></div><button className="close-button" type="button" onClick={() => setSelected(null)} aria-label="닫기">×</button></div>
-        {editing ? <form onSubmit={saveEdit}>{problemFields}<label>관리 암호<input required type="password" autoComplete="current-password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder="기존 관리 암호" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '저장 중...' : '수정 내용 저장'} <span>↗</span></button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>수정 취소</button></form> : <><p className="detail-description">{selected.description}</p><div className="detail-stats"><span>조회 {selected.views}</span><span>푼 사람 {selected.solvedCount}</span><span>정답 제출 {selected.correctSubmissions}</span></div>{unlockedExplanation ? <div className="unlocked-explanation"><div className="unlock-title">✓ 정답입니다! 해설이 열렸어요.</div><p>{unlockedExplanation}</p></div> : <form onSubmit={checkAnswer}><label>정답을 입력하면 해설을 볼 수 있어요<input required value={submittedAnswer} onChange={(event) => setSubmittedAnswer(event.target.value)} placeholder="정답 입력" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '확인 중...' : '정답 확인하고 해설 보기'} <span>↗</span></button></form>}<div className="management-actions"><button type="button" className="secondary-button" onClick={beginEdit}>문제 수정</button><button type="button" className="danger-button" disabled={submitting} onClick={() => void deleteProblem()}>문제 삭제</button></div>{answerError && !unlockedExplanation && <div className="notice">{answerError}</div>}</>}
+        {editing ? <form onSubmit={saveEdit}>{problemFields}<label>관리 암호 또는 마스터 암호<input required type="password" autoComplete="current-password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder="문제 관리 암호 또는 마스터 암호" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '저장 중...' : '수정 내용 저장'} <span>↗</span></button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>수정 취소</button></form> : <><p className="detail-description">{selected.description}</p><div className="detail-stats"><span>조회 {selected.views}</span><span>푼 사람 {selected.solvedCount}</span><span>정답 제출 {selected.correctSubmissions}</span></div>{unlockedExplanation ? <div className="unlocked-explanation"><div className="unlock-title">✓ 정답입니다! 해설이 열렸어요.</div><p>{unlockedExplanation}</p></div> : <form onSubmit={checkAnswer}><label>정답을 입력하면 해설을 볼 수 있어요<input required value={submittedAnswer} onChange={(event) => setSubmittedAnswer(event.target.value)} placeholder="정답 입력" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '확인 중...' : '정답 확인하고 해설 보기'} <span>↗</span></button></form>}<div className="management-actions"><button type="button" className="secondary-button" onClick={beginEdit}>문제 수정</button><button type="button" className="danger-button" disabled={submitting} onClick={() => void deleteProblem()}>문제 삭제</button></div>{answerError && !unlockedExplanation && <div className="notice">{answerError}</div>}</>}
       </section></div>}
     </div>
   )
