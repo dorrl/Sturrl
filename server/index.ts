@@ -75,9 +75,9 @@ async function deriveKeys(answer: string, salt: Buffer) {
   return await scrypt(`${answer.normalize('NFKC').trim().toLocaleLowerCase('ko-KR')}:${answerPepper}`, salt, 64) as Buffer
 }
 
-function publicProblem(problem: Problem) {
-  const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, ...safe } = problem
-  return { ...safe, solvedCount: solvedBy.length }
+function publicProblem(problem: Problem, includePhotos = false) {
+  const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, photos, ...safe } = problem
+  return { ...safe, ...(includePhotos && photos ? { photos } : {}), solvedCount: solvedBy.length }
 }
 
 async function persist() {
@@ -157,7 +157,7 @@ app.post('/server/problems', async (req: Request, res: Response) => {
   }
   store.problems.unshift(problem)
   await persist()
-  res.status(201).json({ item: publicProblem(problem) })
+  res.status(201).json({ item: publicProblem(problem, true) })
 })
 
 app.get('/server/problems/:id', async (req: Request, res: Response) => {
@@ -165,7 +165,7 @@ app.get('/server/problems/:id', async (req: Request, res: Response) => {
   if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
   problem.views += 1
   await persist()
-  res.json({ item: publicProblem(problem) })
+  res.json({ item: publicProblem(problem, true) })
 })
 
 app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
@@ -222,7 +222,7 @@ app.put('/server/problems/:id', async (req: Request, res: Response) => {
     author: author.trim(), ...answerMaterial, photos: req.body.photos ?? problem.photos ?? [], updatedAt: new Date().toISOString(),
   })
   await persist()
-  res.json({ item: publicProblem(problem) })
+  res.json({ item: publicProblem(problem, true) })
 })
 
 app.delete('/server/problems/:id', async (req: Request, res: Response) => {
