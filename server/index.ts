@@ -45,7 +45,7 @@ app.use(express.json({ limit: '1mb' }))
 function getVisitorId(req: Request, res: Response) {
   const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('sturrl_visitor='))
   const existing = cookie?.slice('sturrl_visitor='.length)
-  if (existing && /^[a-f0-9-]{36}$/i.test(existing)) return existing
+  if (existing && /^[a-f0-9]{36}$/i.test(existing)) return existing
   const id = randomBytes(18).toString('hex')
   res.setHeader('Set-Cookie', `sturrl_visitor=${id}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isProduction ? '; Secure' : ''}`)
   return id
@@ -87,17 +87,22 @@ app.get('/server/health', (_req: Request, res: Response) => {
 
 app.get('/server/problems', (req: Request, res: Response) => {
   const { subject, grade, difficulty, sort = 'newest', q = '' } = req.query
+  const subjectFilter = typeof subject === 'string' ? subject : ''
+  const gradeFilter = typeof grade === 'string' ? grade : ''
+  const difficultyFilter = typeof difficulty === 'string' ? difficulty : ''
+  const sortBy = typeof sort === 'string' ? sort : 'newest'
+  const query = typeof q === 'string' ? q.toLocaleLowerCase('ko-KR') : ''
   let items = store.problems.filter((problem) => {
-    return (!subject || problem.subject === subject) &&
-      (!grade || problem.grade === grade) &&
-      (!difficulty || problem.difficulty === Number(difficulty)) &&
-      (!q || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(String(q).toLocaleLowerCase('ko-KR')))
+    return (!subjectFilter || problem.subject === subjectFilter) &&
+      (!gradeFilter || problem.grade === gradeFilter) &&
+      (!difficultyFilter || problem.difficulty === Number(difficultyFilter)) &&
+      (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query))
   })
   items = [...items].sort((a, b) => {
-    if (sort === 'views') return b.views - a.views
-    if (sort === 'solved') return b.solvedBy.length - a.solvedBy.length
-    if (sort === 'correct') return b.correctSubmissions - a.correctSubmissions
-    if (sort === 'difficulty') return b.difficulty - a.difficulty
+    if (sortBy === 'views') return b.views - a.views
+    if (sortBy === 'solved') return b.solvedBy.length - a.solvedBy.length
+    if (sortBy === 'correct') return b.correctSubmissions - a.correctSubmissions
+    if (sortBy === 'difficulty') return b.difficulty - a.difficulty
     return b.createdAt.localeCompare(a.createdAt)
   })
   res.json({ items: items.map(publicProblem), total: items.length })
