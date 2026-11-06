@@ -1,106 +1,203 @@
 import express, { type Request, type Response } from 'express'
-import { createServer as createViteServer } from 'vite'
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createServer as createViteServer } from 'vite'
 
+const scrypt = promisify(scryptCallback)
 const app = express()
 const port = Number(process.env.PORT ?? 3000)
 const isProduction = process.env.NODE_ENV === 'production' || dirname(fileURLToPath(import.meta.url)).endsWith('dist-server')
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const dataDir = resolve(rootDir, 'data')
+const dataFile = resolve(dataDir, 'problems.json')
+const answerPepper = process.env.ANSWER_PEPPER ?? 'sturrl-development-only-change-this-before-deploying'
+const subjects = ['국어', '영어', '수학', '사회', '과학', '한국사']
+const grades = ['중1', '중2', '중3', '고1', '고2', '고3', '대학생']
+const difficulties = [1, 2, 3, 4, 5]
 
 type Problem = {
   id: string
   title: string
   description: string
-  category: string
+  subject: string
+  grade: string
+  difficulty: number
   author: string
   createdAt: string
   views: number
-  answers: number
+  solvedBy: string[]
+  correctSubmissions: number
+  answerSalt: string
+  answerVerifier: string
+  explanation: { iv: string; tag: string; ciphertext: string }
 }
-
-const problems: Problem[] = [
-  {
-    id: 'p-001',
-    title: '이차함수의 최댓값과 최솟값을 구하는 방법',
-    description: '꼭짓점의 x좌표를 구한 뒤 함수값을 대입하는 과정이 헷갈립니다. 풀이 과정을 설명해 주세요.',
-    category: '수학',
-    author: 'study_fox',
-    createdAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    views: 128,
-    answers: 4,
-  },
-  {
-    id: 'p-002',
-    title: '파이썬에서 비동기 함수가 실행되는 순서',
-    description: 'async와 await를 사용했을 때 일반 함수와 실행 순서가 어떻게 달라지는지 궁금해요.',
-    category: '프로그래밍',
-    author: 'bytebean',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-    views: 96,
-    answers: 7,
-  },
-  {
-    id: 'p-003',
-    title: '뉴턴 운동 법칙 문제 풀이 도움 요청',
-    description: '마찰력이 있는 경사면에서 물체에 작용하는 힘을 어떤 방향으로 분해해야 할까요?',
-    category: '과학',
-    author: 'orbit_22',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-    views: 74,
-    answers: 2,
-  },
-]
+type Store = { problems: Problem[] }
+let store: Store = { problems: [] }
+let writeQueue = Promise.resolve()
+const attempts = new Map<string, { count: number; resetAt: number }>()
 
 app.disable('x-powered-by')
 app.use(express.json({ limit: '1mb' }))
+
+function getVisitorId(req: Request, res: Response) {
+  const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('sturrl_visitor='))
+  const existing = cookie?.slice('sturrl_visitor='.length)
+  if (existing && /^[a-f0-9-]{36}$/i.test(existing)) return existing
+  const id = randomBytes(18).toString('hex')
+  res.setHeader('Set-Cookie', `sturrl_visitor=${id}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isProduction ? '; Secure' : ''}`)
+  return id
+}
+
+function limitAttempts(req: Request, res: Response) {
+  const key = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+  const now = Date.now()
+  const current = attempts.get(key)
+  if (!current || current.resetAt <= now) {
+    attempts.set(key, { count: 1, resetAt: now + 5 * 60 * 1000 })
+    return false
+  }
+  if (current.count >= 12) {
+    res.status(429).json({ error: '정답 제출 횟수가 너무 많습니다. 5분 후 다시 시도해 주세요.' })
+    return true
+  }
+  current.count += 1
+  return false
+}
+
+async function deriveKeys(answer: string, salt: Buffer) {
+  return await scrypt(`${answer.normalize('NFKC').trim().toLocaleLowerCase('ko-KR')}:${answerPepper}`, salt, 64) as Buffer
+}
+
+function publicProblem(problem: Problem) {
+  const { answerSalt: _salt, answerVerifier: _verifier, explanation: _explanation, solvedBy, ...safe } = problem
+  return { ...safe, solvedCount: solvedBy.length }
+}
+
+async function persist() {
+  writeQueue = writeQueue.then(() => writeFile(dataFile, JSON.stringify(store, null, 2), 'utf8'))
+  await writeQueue
+}
 
 app.get('/server/health', (_req: Request, res: Response) => {
   res.json({ ok: true, service: 'sturrl-api', timestamp: new Date().toISOString() })
 })
 
-app.get('/server/problems', (_req: Request, res: Response) => {
-  res.json({ items: problems, total: problems.length })
+app.get('/server/problems', (req: Request, res: Response) => {
+  const { subject, grade, difficulty, sort = 'newest', q = '' } = req.query
+  let items = store.problems.filter((problem) => {
+    return (!subject || problem.subject === subject) &&
+      (!grade || problem.grade === grade) &&
+      (!difficulty || problem.difficulty === Number(difficulty)) &&
+      (!q || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(String(q).toLocaleLowerCase('ko-KR')))
+  })
+  items = [...items].sort((a, b) => {
+    if (sort === 'views') return b.views - a.views
+    if (sort === 'solved') return b.solvedBy.length - a.solvedBy.length
+    if (sort === 'correct') return b.correctSubmissions - a.correctSubmissions
+    if (sort === 'difficulty') return b.difficulty - a.difficulty
+    return b.createdAt.localeCompare(a.createdAt)
+  })
+  res.json({ items: items.map(publicProblem), total: items.length })
 })
 
-app.post('/server/problems', (req: Request, res: Response) => {
-  const { title, description, category, author } = req.body ?? {}
+app.post('/server/problems', async (req: Request, res: Response) => {
+  const { title, description, subject, grade, difficulty, author, answer, explanation } = req.body ?? {}
   if (
     typeof title !== 'string' || title.trim().length < 3 || title.trim().length > 120 ||
     typeof description !== 'string' || description.trim().length < 5 || description.trim().length > 5000 ||
-    typeof category !== 'string' || category.trim().length === 0 ||
-    typeof author !== 'string' || author.trim().length === 0
+    !subjects.includes(subject) || !grades.includes(grade) || !difficulties.includes(Number(difficulty)) ||
+    typeof author !== 'string' || author.trim().length === 0 || author.trim().length > 30 ||
+    typeof answer !== 'string' || answer.trim().length < 1 || answer.trim().length > 200 ||
+    typeof explanation !== 'string' || explanation.trim().length < 1 || explanation.trim().length > 10000
   ) {
-    res.status(400).json({ error: '제목, 내용, 분야, 작성자를 올바르게 입력해 주세요.' })
+    res.status(400).json({ error: '문제 정보, 분류, 정답, 해설을 올바르게 입력해 주세요.' })
     return
   }
 
+  const answerSalt = randomBytes(16)
+  const keys = await deriveKeys(answer, answerSalt)
+  const answerVerifier = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', keys.subarray(0, 32), iv)
+  const ciphertext = Buffer.concat([cipher.update(explanation, 'utf8'), cipher.final()])
   const problem: Problem = {
-    id: `p-${Date.now()}`,
+    id: randomBytes(12).toString('hex'),
     title: title.trim(),
     description: description.trim(),
-    category: category.trim(),
-    author: author.trim().slice(0, 30),
+    subject,
+    grade,
+    difficulty: Number(difficulty),
+    author: author.trim(),
     createdAt: new Date().toISOString(),
     views: 0,
-    answers: 0,
+    solvedBy: [],
+    correctSubmissions: 0,
+    answerSalt: answerSalt.toString('base64'),
+    answerVerifier: answerVerifier.toString('base64'),
+    explanation: { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') },
   }
-  problems.unshift(problem)
-  res.status(201).json({ item: problem })
+  store.problems.unshift(problem)
+  await persist()
+  res.status(201).json({ item: publicProblem(problem) })
+})
+
+app.get('/server/problems/:id', async (req: Request, res: Response) => {
+  const problem = store.problems.find((item) => item.id === req.params.id)
+  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
+  problem.views += 1
+  await persist()
+  res.json({ item: publicProblem(problem) })
+})
+
+app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
+  if (limitAttempts(req, res)) return
+  const problem = store.problems.find((item) => item.id === req.params.id)
+  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
+  const answer = req.body?.answer
+  if (typeof answer !== 'string' || answer.length > 200) { res.status(400).json({ error: '정답을 입력해 주세요.' }); return }
+
+  const keys = await deriveKeys(answer, Buffer.from(problem.answerSalt, 'base64'))
+  const candidate = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
+  const expected = Buffer.from(problem.answerVerifier, 'base64')
+  const correct = candidate.length === expected.length && timingSafeEqual(candidate, expected)
+  if (!correct) { res.json({ correct: false, error: '정답이 아닙니다. 다시 생각해 보세요.' }); return }
+
+  problem.correctSubmissions += 1
+  const visitorId = getVisitorId(req, res)
+  if (!problem.solvedBy.includes(visitorId)) problem.solvedBy.push(visitorId)
+  const encrypted = problem.explanation
+  const decipher = createDecipheriv('aes-256-gcm', keys.subarray(0, 32), Buffer.from(encrypted.iv, 'base64'))
+  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'))
+  const explanation = Buffer.concat([
+    decipher.update(Buffer.from(encrypted.ciphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8')
+  await persist()
+  res.json({ correct: true, explanation, solvedCount: problem.solvedBy.length, correctSubmissions: problem.correctSubmissions })
 })
 
 async function start() {
+  await mkdir(dataDir, { recursive: true })
+  try {
+    store = JSON.parse(await readFile(dataFile, 'utf8')) as Store
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    await persist()
+  }
+
+  if (process.env.ANSWER_PEPPER === undefined) {
+    console.warn('[Sturrl] ANSWER_PEPPER is not set; using development fallback. Set a strong secret in production.')
+  }
+
   if (isProduction) {
     const clientDir = resolve(rootDir, 'dist')
     app.use(express.static(clientDir))
     app.get(/.*/, (_req, res) => res.sendFile(resolve(clientDir, 'index.html')))
   } else {
-    const vite = await createViteServer({
-      configFile: resolve(rootDir, 'vite.config.ts'),
-      root: rootDir,
-      server: { middlewareMode: true },
-      appType: 'spa',
-    })
+    const vite = await createViteServer({ configFile: resolve(rootDir, 'vite.config.ts'), root: rootDir, server: { middlewareMode: true }, appType: 'spa' })
     app.use(vite.middlewares)
   }
 
