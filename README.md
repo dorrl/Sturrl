@@ -25,6 +25,7 @@ npm start
 - `PORT`: 서버 포트 (기본 3000)
 - `ANSWER_PEPPER`: 정답 검증 및 해설 키 파생에 사용하는 서버 비밀값. 운영 환경에서는 반드시 충분히 긴 무작위 값으로 설정하고, 변경하거나 분실하면 기존 문제의 정답 검증/해설 복호화가 불가능해집니다.
 - `MASTER_PASSWORD_HASH`: 모든 문제를 수정·삭제할 수 있는 운영자 마스터 암호의 Argon2id PHC 해시. 평문 암호가 아닌 해시만 환경 변수에 설정하세요.
+- 로컬 실행에서는 프로젝트 루트에서 `cp .example.env .env`로 `.env` 파일을 만든 뒤 값을 채우면 서버 시작 시 자동으로 읽습니다. 배포 플랫폼에서 환경 변수를 직접 지정한 경우에는 이미 지정된 값이 우선 적용됩니다.
 
 ## 문제 사진
 - 문제마다 사진을 최대 5장까지 첨부할 수 있습니다.
@@ -49,14 +50,14 @@ node --input-type=module -e "import { hash } from '@node-rs/argon2'; console.log
 ## API
 - `GET /server/health`
 - `GET /server/problems` — `subject`, `grade`, `difficulty`는 반복 쿼리 파라미터로 복수 선택(OR) 가능하며, 분류 간에는 AND로 적용됩니다. `sort`, `q`도 지원합니다.
-- `POST /server/problems` — 문제, 정답, 해설, 관리 암호 및 선택 사진(최대 5장) 등록
-- `GET /server/problems/:id` — 문제 상세 및 조회수 증가
+- `POST /server/problems` — 문제, 정답, 해설, 관리 암호 및 선택 사진(최대 5장) 등록 (`/create` 화면에서 사용)
+- `GET /server/problems/:id` — 문제 상세 및 조회수 증가 (`/problem/:id` 화면에서 사용)
 - `POST /server/problems/:id/answer` — 정답 검증 후 맞으면 해설 반환
 - `PUT /server/problems/:id` — `managementPassword` 검증 후 문제 수정(사진 포함)
 - `DELETE /server/problems/:id` — JSON body의 `managementPassword` 검증 후 삭제
 
 ## 보안과 통계 메모
-관리 암호는 Argon2id(메모리 19 MiB, 반복 2회, 병렬도 1)로 해싱하며, 각 암호의 salt는 라이브러리가 무작위 생성해 PHC 해시 문자열에 포함합니다. 암호 원문은 파일에 저장하지 않습니다. 정답 문자열도 평문으로 저장하지 않습니다. 서버는 문제별 salt와 `ANSWER_PEPPER`를 사용해 scrypt 키를 파생하고, 독립된 HMAC 검증값을 비교합니다. 해설은 파생 키로 AES-256-GCM 암호화해 저장하며 정답 검증이 성공한 요청에만 복호화 결과를 반환합니다. 정답 제출 API에는 IP 기준 5분 12회 제한을 둡니다.
+관리 암호는 Argon2id(메모리 19 MiB, 반복 2회, 병렬도 1)로 해싱하며, 각 암호의 salt는 라이브러리가 무작위 생성해 PHC 해시 문자열에 포함합니다. 암호 원문은 파일에 저장하지 않습니다. 정답 문자열도 평문으로 저장하지 않습니다. 서버는 문제별 salt와 `ANSWER_PEPPER`를 사용해 scrypt 키를 파생하고, 독립된 HMAC 검증값을 비교합니다. 해설은 파생 키로 AES-256-GCM 암호화해 저장하며 정답 검증이 성공한 요청에만 복호화 결과를 반환합니다. 정답 제출 API에는 IP 기준 5분 12회 제한을 둡니다. 문제별 `attempts`는 정답·오답을 포함한 전체 유효 제출 횟수이고, `correctSubmissions`는 정답 제출 횟수입니다.
 
 이 구조는 데이터 파일이 유출되었을 때 평문 해설을 바로 읽지 못하게 하는 저장 시 암호화입니다. 서버가 정답을 검증하고 해설을 복호화하므로 서버 운영자나 서버 자체에 대한 종단간 암호화는 아닙니다. 짧고 흔한 정답은 추측 공격에 취약할 수 있으므로 출제자는 가능한 한 구체적인 정답 표현을 사용해야 합니다.
 

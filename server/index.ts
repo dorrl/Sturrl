@@ -2,16 +2,19 @@ import express, { type Request, type Response } from 'express'
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer as createViteServer } from 'vite'
 import { hash, verify } from '@node-rs/argon2'
 
 const scrypt = promisify(scryptCallback)
+const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// Node does not load .env files automatically. Load the project-local file before reading configuration.
+if (existsSync(resolve(rootDir, '.env'))) process.loadEnvFile(resolve(rootDir, '.env'))
 const app = express()
 const port = Number(process.env.PORT ?? 3000)
 const isProduction = process.env.NODE_ENV === 'production' || dirname(fileURLToPath(import.meta.url)).endsWith('dist-server')
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dataDir = resolve(rootDir, 'data')
 const dataFile = resolve(dataDir, 'problems.json')
 const answerPepper = process.env.ANSWER_PEPPER ?? 'sturrl-development-only-change-this-before-deploying'
@@ -32,6 +35,7 @@ type Problem = {
   views: number
   solvedBy: string[]
   correctSubmissions: number
+  attempts?: number
   answerSalt: string
   answerVerifier: string
   managementPasswordHash?: string
@@ -77,7 +81,7 @@ async function deriveKeys(answer: string, salt: Buffer) {
 
 function publicProblem(problem: Problem, includePhotos = false) {
   const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, photos, ...safe } = problem
-  return { ...safe, ...(includePhotos && photos ? { photos } : {}), solvedCount: Array.isArray(solvedBy) ? solvedBy.length : 0 }
+  return { ...safe, attempts: Number.isFinite(problem.attempts) ? problem.attempts : problem.correctSubmissions, ...(includePhotos && photos ? { photos } : {}), solvedCount: Array.isArray(solvedBy) ? solvedBy.length : 0 }
 }
 
 async function persist() {
@@ -139,7 +143,8 @@ app.get('/server/problems', (req: Request, res: Response) => {
     if (sortBy === 'difficulty') return b.difficulty - a.difficulty
     return b.createdAt.localeCompare(a.createdAt)
   })
-  res.json({ items: items.map((problem) => publicProblem(problem)), total: items.length })
+  const correctSubmissions = store.problems.reduce((sum, problem) => sum + (Number.isFinite(problem.correctSubmissions) ? problem.correctSubmissions : 0), 0)
+  res.json({ items: items.map((problem) => publicProblem(problem)), total: items.length, stats: { correctSubmissions } })
 })
 
 app.post('/server/problems', async (req: Request, res: Response) => {
@@ -153,7 +158,7 @@ app.post('/server/problems', async (req: Request, res: Response) => {
   const problem: Problem = {
     id: randomBytes(12).toString('hex'), title: title.trim(), description: description.trim(), subject, grade,
     difficulty: Number(difficulty), author: author.trim(), createdAt: new Date().toISOString(), views: 0,
-    solvedBy: [], correctSubmissions: 0, ...answerMaterial, managementPasswordHash, photos: photos ?? [],
+    solvedBy: [], attempts: 0, correctSubmissions: 0, ...answerMaterial, managementPasswordHash, photos: photos ?? [],
   }
   store.problems.unshift(problem)
   await persist()
@@ -174,11 +179,16 @@ app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
   if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
   const answer = req.body?.answer
   if (typeof answer !== 'string' || answer.length > 200) { res.status(400).json({ error: '정답을 입력해 주세요.' }); return }
+  problem.attempts = (problem.attempts ?? problem.correctSubmissions ?? 0) + 1
   const keys = await deriveKeys(answer, Buffer.from(problem.answerSalt, 'base64'))
   const candidate = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
   const expected = Buffer.from(problem.answerVerifier, 'base64')
   const correct = candidate.length === expected.length && timingSafeEqual(candidate, expected)
-  if (!correct) { res.json({ correct: false, error: '정답이 아닙니다. 다시 생각해 보세요.' }); return }
+  if (!correct) {
+    await persist()
+    res.json({ correct: false, attempts: problem.attempts, error: '정답이 아닙니다. 다시 생각해 보세요.' })
+    return
+  }
   problem.correctSubmissions += 1
   const visitorId = getVisitorId(req, res)
   if (!problem.solvedBy.includes(visitorId)) problem.solvedBy.push(visitorId)
@@ -187,18 +197,19 @@ app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
   decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'))
   const explanation = Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, 'base64')), decipher.final()]).toString('utf8')
   await persist()
-  res.json({ correct: true, explanation, solvedCount: problem.solvedBy.length, correctSubmissions: problem.correctSubmissions })
+  res.json({ correct: true, explanation, solvedCount: problem.solvedBy.length, attempts: problem.attempts, correctSubmissions: problem.correctSubmissions })
 })
 
 async function authorizeManagement(problem: Problem, password: unknown) {
   if (typeof password !== 'string' || password.length < 1 || password.length > 256) return false
 
-  const masterPasswordHash = process.env.MASTER_PASSWORD_HASH
+  // MASTER_PASSWORD_HASH is an Argon2id PHC string loaded from the host environment or .env.
+  const masterPasswordHash = process.env.MASTER_PASSWORD_HASH?.trim()
   if (masterPasswordHash) {
     try {
       if (await verify(masterPasswordHash, password)) return true
     } catch {
-      // An invalid master hash must not prevent the problem-specific password check.
+      // A malformed master hash must not prevent the problem-specific password check.
     }
   }
 
@@ -265,3 +276,12 @@ async function start() {
   })
 }
 start().catch((error: unknown) => { console.error('[Sturrl] Failed to start:', error); process.exit(1) })
+) && await verify(masterPasswordHash, password)) return true
+    } catch {
+      // An invalid master hash must not prevent the problem-specific password check.
+    }
+  }
+
+  if (!problem.managementPasswordHash) return false
+  try { return await verify(problem.managementPasswordHash, password) } catch { return false }
+}
