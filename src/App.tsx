@@ -83,8 +83,9 @@ function App() {
       if (search.trim()) params.set('q', search.trim())
       const response = await fetch(`/server/problems?${params}`)
       if (!response.ok) throw new Error('문제 목록을 불러오지 못했습니다.')
-      const data = await response.json() as { items: Problem[] }
-      setProblems(data.items)
+      const data = await response.json() as { items?: Array<Problem | null> }
+      // Treat malformed/null API entries as invalid instead of letting the UI dereference them.
+      setProblems(Array.isArray(data.items) ? data.items.filter((item): item is Problem => Boolean(item && typeof item === 'object' && typeof item.id === 'string')) : [])
       setError('')
     } catch (cause) { setError(cause instanceof Error ? cause.message : '서버에 연결할 수 없습니다.') }
     finally { setLoading(false) }

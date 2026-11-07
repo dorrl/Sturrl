@@ -139,7 +139,7 @@ app.get('/server/problems', (req: Request, res: Response) => {
     if (sortBy === 'difficulty') return b.difficulty - a.difficulty
     return b.createdAt.localeCompare(a.createdAt)
   })
-  res.json({ items: items.map((problem) => { publicProblem(problem) }), total: items.length })
+  res.json({ items: items.map((problem) => publicProblem(problem)), total: items.length })
 })
 
 app.post('/server/problems', async (req: Request, res: Response) => {
