@@ -55,7 +55,7 @@
 .search-box > span { font-size: 20px; }
 .search-box input { width: 100%; border: 0; outline: 0; color: #48495e; background: transparent; font-size: 10px; }
 .problem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
-.problem-card { position: relative; min-height: 206px; padding: 20px 19px 16px; border: 1px solid #eaebf2; border-radius: 11px; background: #fff; transition: transform .2s, box-shadow .2s, border-color .2s; overflow: hidden; }
+.problem-card { position: relative; min-height: 206px; padding: 0 19px 16px; border: 1px solid #eaebf2; border-radius: 11px; background: #fff; transition: transform .2s, box-shadow .2s, border-color .2s; overflow: hidden; }
 .problem-card:hover { transform: translateY(-4px); border-color: #d9d6ff; box-shadow: 0 13px 28px #3d3c7810; }
 .problem-card-top { display: flex; align-items: center; justify-content: space-between; }
 .category-badge { border-radius: 5px; padding: 5px 8px; font-size: 9px; font-weight: 800; }
