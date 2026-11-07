@@ -77,7 +77,7 @@ async function deriveKeys(answer: string, salt: Buffer) {
 
 function publicProblem(problem: Problem, includePhotos = false) {
   const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, photos, ...safe } = problem
-  return { ...safe, ...(includePhotos && photos ? { photos } : {}), solvedCount: solvedBy.length }
+  return { ...safe, ...(includePhotos && photos ? { photos } : {}), solvedCount: Array.isArray(solvedBy) ? solvedBy.length : 0 }
 }
 
 async function persist() {
@@ -129,7 +129,7 @@ app.get('/server/problems', (req: Request, res: Response) => {
   const difficultyFilters = toFilterList(difficulty).map(Number).filter((item) => difficulties.includes(item))
   const sortBy = typeof sort === 'string' ? sort : 'newest'
   const query = typeof q === 'string' ? q.toLocaleLowerCase('ko-KR') : ''
-  let items = store.problems.filter((problem) => (!subjectFilters.length || subjectFilters.includes(problem.subject)) &&
+  let items = store.problems.filter((problem): problem is Problem => Boolean(problem && typeof problem === 'object' && problem.id)).filter((problem) => (!subjectFilters.length || subjectFilters.includes(problem.subject)) &&
     (!gradeFilters.length || gradeFilters.includes(problem.grade)) && (!difficultyFilters.length || difficultyFilters.includes(problem.difficulty)) &&
     (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query)))
   items = [...items].sort((a, b) => {
@@ -239,7 +239,12 @@ app.delete('/server/problems/:id', async (req: Request, res: Response) => {
 async function start() {
   await mkdir(dataDir, { recursive: true })
   try {
-    store = JSON.parse(await readFile(dataFile, 'utf8')) as Store
+    const parsed = JSON.parse(await readFile(dataFile, 'utf8')) as Partial<Store>
+    store = {
+      problems: Array.isArray(parsed.problems)
+        ? parsed.problems.filter((problem): problem is Problem => Boolean(problem && typeof problem === 'object' && typeof problem.id === 'string'))
+        : [],
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     await persist()

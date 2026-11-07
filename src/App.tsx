@@ -101,7 +101,7 @@ function App() {
   function toggleFilter(values: string[], value: string, setter: (next: string[]) => void) {
     setter(values.includes(value) ? values.filter((item) => item !== value) : [...values, value])
   }
-  const totalSolved = useMemo(() => problems.reduce((sum, item) => sum + item.solvedCount, 0), [problems])
+  const totalSolved = useMemo(() => problems.reduce((sum, item) => sum + (item?.solvedCount ?? 0), 0), [problems])
 
   function clearComposer() {
     setShowComposer(false); setEditing(false); setTitle(''); setDescription(''); setAnswer(''); setExplanation('')
