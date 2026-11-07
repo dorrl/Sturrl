@@ -276,12 +276,3 @@ async function start() {
   })
 }
 start().catch((error: unknown) => { console.error('[Sturrl] Failed to start:', error); process.exit(1) })
-) && await verify(masterPasswordHash, password)) return true
-    } catch {
-      // An invalid master hash must not prevent the problem-specific password check.
-    }
-  }
-
-  if (!problem.managementPasswordHash) return false
-  try { return await verify(problem.managementPasswordHash, password) } catch { return false }
-}
