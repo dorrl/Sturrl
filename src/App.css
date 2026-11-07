@@ -55,7 +55,7 @@
 .search-box > span { font-size: 20px; }
 .search-box input { width: 100%; border: 0; outline: 0; color: #48495e; background: transparent; font-size: 10px; }
 .problem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 15px; }
-.problem-card { position: relative; min-height: 206px; padding: 20px 19px 16px; border: 1px solid #eaebf2; border-radius: 11px; background: #fff; transition: transform .2s, box-shadow .2s, border-color .2s; overflow: hidden; }
+.problem-card { position: relative; display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; box-sizing: border-box; min-width: 0; min-height: 206px; padding: 20px 19px 16px; border: 1px solid #eaebf2; border-radius: 11px; background: #fff; transition: transform .2s, box-shadow .2s, border-color .2s; overflow: hidden; }
 .problem-card:hover { transform: translateY(-4px); border-color: #d9d6ff; box-shadow: 0 13px 28px #3d3c7810; }
 .problem-card-top { display: flex; align-items: center; justify-content: space-between; }
 .category-badge { border-radius: 5px; padding: 5px 8px; font-size: 9px; font-weight: 800; }
@@ -66,7 +66,7 @@
 .card-time { color: #b2b3c0; font-size: 9px; }
 .problem-card h3 { position: relative; z-index: 1; margin: 17px 0 8px; color: #38394e; font-size: 13px; line-height: 1.55; letter-spacing: -.3px; }
 .problem-description { display: -webkit-box; min-height: 38px; overflow: hidden; color: #9698a8; font-size: 10px; line-height: 1.8; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.problem-card-bottom { position: absolute; right: 17px; bottom: 15px; left: 17px; display: flex; align-items: center; gap: 7px; padding-top: 12px; border-top: 1px solid #f0f0f5; }
+.problem-card-bottom { position: static; display: flex; flex: 0 0 auto; align-items: center; gap: 7px; min-width: 0; margin: auto -2px 0; padding-top: 12px; border-top: 1px solid #f0f0f5; }
 .author-avatar { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #efefff; color: #726bd1; font-size: 9px; font-weight: 800; }
 .author-name { color: #77798d; font-size: 9px; font-weight: 700; }
 .card-metric { margin-left: 7px; color: #adaebd; font-size: 9px; }
@@ -144,7 +144,7 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .app-shell button:active:not(:disabled) { transform: translateY(1px) scale(.98); }
 .app-shell button:focus-visible { outline: 3px solid #9993ed80; outline-offset: 3px; }
 .app-shell button:disabled { cursor: not-allowed; }
-.problem-card-button { display: block !important; }
+.problem-card-button { display: flex !important; flex-direction: column; align-items: stretch; justify-content: flex-start; text-align: left; }
 .filter-options button { min-height: 30px; }
 .filter-options button.chosen { box-shadow: inset 0 0 0 1px #d9d6ff; }
 .profile-button:hover, .hero-cta:hover, .submit-button:hover, .bottom-banner button:hover { box-shadow: 0 9px 22px #6961d940; }
