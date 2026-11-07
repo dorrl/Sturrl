@@ -222,30 +222,68 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .source-link:hover { color: #6961d9; }
 .theme-toggle { display: grid !important; place-items: center; padding: 0 !important; aspect-ratio: 1 / 1; }
 .theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sort-select-wrap { position: relative; display: inline-flex; align-items: center; min-width: 132px; }
 .sort-select {
-  min-width: 132px; height: 40px; appearance: none; -webkit-appearance: none;
-  padding: 0 34px 0 13px; border: 1px solid #e4e5ef; border-radius: 9px;
-  color: #55566f; background-color: #fff;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23777791' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 11px center; cursor: pointer;
-  font-size: 11px; font-weight: 600; transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
+  width: 100%; min-width: 0; height: 40px; appearance: none; -webkit-appearance: none;
+  padding: 0 38px 0 13px; border: 1px solid #e4e5ef; border-radius: 10px;
+  color: #55566f; background: #fff; cursor: pointer;
+  font: 600 11px/1.2 inherit; transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease, transform .2s ease;
 }
-.sort-select:hover { border-color: #c9c5f3; }
+.sort-select:hover { border-color: #bdb8f0; background: #fcfbff; }
+.sort-select:focus-visible { outline: none !important; border-color: #8179e4; box-shadow: 0 0 0 3px #8179e426, 0 5px 16px #5e57c51a; }
 .sort-select option { color: #45465c; background: #fff; }
+.sort-chevron { position: absolute; right: 12px; width: 15px; height: 15px; fill: none; stroke: #777791; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: transform .2s ease, stroke .2s ease; }
+.sort-select-wrap:focus-within .sort-chevron { transform: translateY(1px); stroke: #7169dc; }
 :where(button, a, input, textarea, select, [tabindex]):focus-visible {
-  outline: 3px solid #8b83ed !important; outline-offset: 3px;
+  outline: none !important;
+  box-shadow: 0 0 0 3px #8b83ed26, 0 0 0 5px #8b83ed12, 0 8px 22px #5149b51a;
 }
 :where(input, textarea, select) { accent-color: #7169dc; }
-.search-box:focus-within { border-color: #aaa4ee; box-shadow: 0 0 0 3px #9993ed20; }
-.dark-mode .sort-select { color: #e3e3f2; background-color: #202033; border-color: #38384f; }
+.search-box { transition: border-color .22s ease, box-shadow .22s ease, background-color .22s ease, transform .22s ease; }
+.search-box:focus-within { border-color: #aaa4ee; background: #fdfcff; box-shadow: 0 0 0 3px #9993ed20, 0 7px 20px #5149b512; transform: translateY(-1px); }
+.dark-mode .sort-select { color: #e3e3f2; background: #202033; border-color: #38384f; }
 .dark-mode .sort-select option { color: #eeeef8; background: #202033; }
+.dark-mode .sort-chevron { stroke: #b5b3d1; }
+.dark-mode .sort-select-wrap:focus-within .sort-chevron { stroke: #c9c4ff; }
+.dark-mode .search-box:focus-within { background: #24243a; box-shadow: 0 0 0 3px #9993ed26, 0 7px 20px #0003; }
 .dark-mode .source-link { color: #85859f; }
 .dark-mode .source-link:hover { color: #c9c4ff; }
 .dark-mode .route-composer { background: #202033; border-color: #38384f; }
-.dark-mode .sort-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b5b3d1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
 @media (max-width: 700px) {
   .route-page { min-height: calc(100vh - 150px); padding: 28px 0 48px; }
   .route-composer { padding: 22px; }
-  .sort-select { min-width: 112px; padding-left: 10px; }
+  .sort-select-wrap { min-width: 112px; } .sort-select { padding-left: 10px; }
   .source-link { width: 100%; text-align: center; }
+}
+
+
+/* Soft, animated keyboard focus and tactile interaction states */
+.app-shell :where(button, a, input, textarea, select, [tabindex]) { -webkit-tap-highlight-color: transparent; }
+.app-shell :where(button, a, input, textarea, select) { transition: border-color .22s ease, background-color .22s ease, color .22s ease, box-shadow .22s ease, transform .22s ease, filter .22s ease; }
+.app-shell :where(button, a, input, textarea, select):focus-visible {
+  position: relative;
+  outline: none !important;
+  border-color: #958df0;
+  box-shadow: 0 0 0 3px #8b83ed24, 0 0 0 6px #8b83ed0d, 0 8px 22px #5149b51a;
+  animation: focus-arrive .28s cubic-bezier(.2,.8,.2,1) both;
+}
+.app-shell :where(button, a):focus-visible { filter: saturate(1.08); }
+.app-shell :where(input, textarea):focus-visible { background-color: #fdfcff; }
+.app-shell :where(button, a):active:not(:disabled) { filter: brightness(.98); }
+.app-shell .problem-card-button:focus-visible { border-radius: 11px; box-shadow: inset 0 0 0 1px #aaa4ee, 0 0 0 3px #8b83ed24, 0 12px 26px #5149b51a; }
+.app-shell .filter-options button:focus-visible, .app-shell .category-tabs button:focus-visible { background: #f4f2ff; }
+.app-shell .composer input:focus, .app-shell .composer textarea:focus, .app-shell .composer select:focus {
+  border-color: #958df0; box-shadow: 0 0 0 3px #9993ed22, 0 6px 16px #5149b510; transform: translateY(-1px);
+}
+.dark-mode .app-shell :where(button, a, input, textarea, select):focus-visible {
+  border-color: #938bea; background-color: #282740; box-shadow: 0 0 0 3px #9c94ff2b, 0 0 0 6px #9c94ff12, 0 8px 24px #0005;
+}
+.dark-mode .app-shell :where(input, textarea):focus-visible { background-color: #25253c; }
+.dark-mode .app-shell .filter-options button:focus-visible, .dark-mode .app-shell .category-tabs button:focus-visible { background: #393556; }
+@keyframes focus-arrive {
+  from { transform: translateY(1px) scale(.995); }
+  to { transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell :where(button, a, input, textarea, select), .sort-chevron { transition: none !important; animation: none !important; }
 }
