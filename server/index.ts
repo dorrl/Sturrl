@@ -99,11 +99,11 @@ function validPhotos(value: unknown) {
 function validProblemFields(body: any) {
   const { title, description, subject, grade, difficulty, author, answer, explanation } = body ?? {}
   return typeof title === 'string' && title.trim().length >= 3 && title.trim().length <= 120 &&
-    typeof description === 'string' && description.trim().length >= 5 && description.trim().length <= 5000 &&
+    typeof description === 'string' && description.trim().length <= 5000 &&
     subjects.includes(subject) && grades.includes(grade) && difficulties.includes(Number(difficulty)) &&
     typeof author === 'string' && author.trim().length > 0 && author.trim().length <= 30 &&
     typeof answer === 'string' && answer.trim().length > 0 && answer.trim().length <= 200 &&
-    typeof explanation === 'string' && explanation.trim().length > 0 && explanation.trim().length <= 10000 && validPhotos(body?.photos)
+    typeof explanation === 'string' && explanation.trim().length <= 10000 && validPhotos(body?.photos)
 }
 
 async function buildAnswerMaterial(answer: string, explanation: string) {
