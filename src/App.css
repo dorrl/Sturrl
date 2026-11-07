@@ -66,7 +66,7 @@
 .card-time { color: #b2b3c0; font-size: 9px; }
 .problem-card h3 { position: relative; z-index: 1; margin: 17px 0 8px; color: #38394e; font-size: 13px; line-height: 1.55; letter-spacing: -.3px; }
 .problem-description { display: -webkit-box; min-height: 38px; overflow: hidden; color: #9698a8; font-size: 10px; line-height: 1.8; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.problem-card-bottom { position: absolute; right: 19px; bottom: 16px; left: 19px; display: flex; align-items: center; gap: 7px; padding-top: 12px; border-top: 1px solid #f0f0f5; }
+.problem-card-bottom { position: absolute; right: 19px; bottom: 24px; left: 19px; display: flex; align-items: center; gap: 7px; padding-top: 12px; border-top: 1px solid #f0f0f5; }
 .author-avatar { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #efefff; color: #726bd1; font-size: 9px; font-weight: 800; }
 .author-name { color: #77798d; font-size: 9px; font-weight: 700; }
 .card-metric { margin-left: 7px; color: #adaebd; font-size: 9px; }
