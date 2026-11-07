@@ -287,3 +287,35 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 @media (prefers-reduced-motion: reduce) {
   .app-shell :where(button, a, input, textarea, select), .sort-chevron { transition: none !important; animation: none !important; }
 }
+
+
+/* Search field focus is handled by its container, not the inner input */
+.app-shell .search-box input:focus,
+.app-shell .search-box input:focus-visible,
+.dark-mode .search-box input:focus,
+.dark-mode .search-box input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  transform: none !important;
+  filter: none !important;
+}
+.app-shell .search-box:focus-within {
+  border-color: #c4c0ee;
+  background: #fff;
+  box-shadow: 0 0 0 2px #8179e414;
+  transform: none;
+}
+.dark-mode .search-box:focus-within {
+  border-color: #625c9e;
+  background: #202033;
+  box-shadow: 0 0 0 2px #9c94ff1b;
+  transform: none;
+}
+.dark-mode .search-box input,
+.dark-mode .search-box input:focus,
+.dark-mode .search-box input:focus-visible { color: #eeeef8; }
+.share-button { gap: 7px; }
+.share-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.share-feedback { margin: 9px 0 0; color: #7770d9; font-size: 11px; }
+.dark-mode .share-feedback { color: #c9c4ff; }

@@ -74,6 +74,7 @@ function App() {
   const [unlockedExplanation, setUnlockedExplanation] = useState('')
   const [answerError, setAnswerError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [shareFeedback, setShareFeedback] = useState('')
 
   function navigate(path: string) {
     window.history.pushState({}, '', path)
@@ -213,6 +214,37 @@ function App() {
     finally { setSubmitting(false) }
   }
 
+  async function shareProblem() {
+    if (!selected) return
+    const url = `${window.location.origin}/problem/${encodeURIComponent(selected.id)}`
+    const shareData = { title: selected.title, text: 'Sturrl에서 문제를 확인해 보세요.', url }
+    setShareFeedback('')
+    try {
+      if (typeof navigator.share === 'function') {
+        await navigator.share(shareData)
+        setShareFeedback('공유 창을 열었어요.')
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url)
+        setShareFeedback('문제 링크를 복사했어요.')
+      } else {
+        const field = document.createElement('textarea')
+        field.value = url
+        field.setAttribute('readonly', '')
+        field.style.position = 'fixed'
+        field.style.opacity = '0'
+        document.body.appendChild(field)
+        field.select()
+        const copied = document.execCommand('copy')
+        field.remove()
+        if (!copied) throw new Error('링크를 복사하지 못했습니다.')
+        setShareFeedback('문제 링크를 복사했어요.')
+      }
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return
+      setShareFeedback('공유하지 못했어요. 주소창의 링크를 복사해 주세요.')
+    }
+  }
+
   async function deleteProblem() {
     if (!selected) return
     const password = window.prompt('문제 관리 암호 또는 마스터 암호를 입력하세요.')
@@ -247,7 +279,7 @@ function App() {
       <main>
         {isCreateRoute ? <section className="route-page"><section className="composer route-composer" aria-labelledby="composer-title"><div className="composer-heading"><div><span className="section-kicker">SHARE YOUR QUESTION</span><h2 id="composer-title">문제와 해설을 공유해요</h2></div><button className="close-button" type="button" onClick={() => clearComposer()} aria-label="닫기">×</button></div><form onSubmit={submitProblem}>{problemFields}<label>문제 관리 암호<input required minLength={8} maxLength={256} type="password" autoComplete="new-password" value={managementPassword} onChange={(event) => setManagementPassword(event.target.value)} placeholder="수정·삭제에 사용할 암호 (8자 이상)" /></label><p className="form-hint">관리 암호는 Argon2id로 해싱해 저장됩니다. 마스터 암호는 운영자가 서버 환경 변수로 별도 설정합니다.</p>{error && <div className="notice" role="status">{error}</div>}<button className="submit-button" type="submit">문제 공유하기 <span>↗</span></button></form></section></section>
         : isProblemRoute ? <section className="route-page">{!selected ? <div className="empty-state">{error || '문제를 불러오는 중이에요...'}</div> : <section className="composer route-composer detail-page" aria-labelledby="detail-title"><div className="composer-heading"><div><span className="section-kicker">{selected.subject} · {selected.grade} · 난이도 {selected.difficulty}/5</span><h2 id="detail-title">{selected.title}</h2></div><button className="close-button" type="button" onClick={() => navigate('/')} aria-label="목록으로">×</button></div>
-        {editing ? <form onSubmit={saveEdit}>{problemFields}<label>관리 암호 또는 마스터 암호<input required type="password" autoComplete="current-password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder="문제 관리 암호 또는 마스터 암호" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '저장 중...' : '수정 내용 저장'} <span>↗</span></button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>수정 취소</button></form> : <><p className="detail-description">{selected.description}</p>{selected.photos?.length ? <div className="detail-photo-grid">{selected.photos.map((photo, photoIndex) => <a key={photoIndex} href={photo} target="_blank" rel="noreferrer"><img src={photo} alt={`문제 사진 ${photoIndex + 1}`} /></a>)}</div> : null}<div className="detail-stats"><span>조회 {selected.views}</span><span>시도 {selected.attempts ?? 0}</span><span>정답 제출 {selected.correctSubmissions}</span></div>{unlockedExplanation ? <div className="unlocked-explanation"><div className="unlock-title">✓ 정답입니다! 해설이 열렸어요.</div><p>{unlockedExplanation}</p></div> : <form onSubmit={checkAnswer}><label>정답 입력<input required value={submittedAnswer} onChange={(event) => setSubmittedAnswer(event.target.value)}/></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '제출 중...' : '정답 제출하기'} <span>↗</span></button></form>}<div className="management-actions"><button type="button" className="secondary-button" onClick={beginEdit}>문제 수정</button><button type="button" className="danger-button" disabled={submitting} onClick={() => void deleteProblem()}>문제 삭제</button></div>{answerError && !unlockedExplanation && <div className="notice">{answerError}</div>}</>}</section>}</section>
+        {editing ? <form onSubmit={saveEdit}>{problemFields}<label>관리 암호 또는 마스터 암호<input required type="password" autoComplete="current-password" value={editPassword} onChange={(event) => setEditPassword(event.target.value)} placeholder="문제 관리 암호 또는 마스터 암호" /></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '저장 중...' : '수정 내용 저장'} <span>↗</span></button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>수정 취소</button></form> : <><p className="detail-description">{selected.description}</p>{selected.photos?.length ? <div className="detail-photo-grid">{selected.photos.map((photo, photoIndex) => <a key={photoIndex} href={photo} target="_blank" rel="noreferrer"><img src={photo} alt={`문제 사진 ${photoIndex + 1}`} /></a>)}</div> : null}<div className="detail-stats"><span>조회 {selected.views}</span><span>시도 {selected.attempts ?? 0}</span><span>정답 제출 {selected.correctSubmissions}</span></div>{unlockedExplanation ? <div className="unlocked-explanation"><div className="unlock-title">✓ 정답입니다! 해설이 열렸어요.</div><p>{unlockedExplanation}</p></div> : <form onSubmit={checkAnswer}><label>정답 입력<input required value={submittedAnswer} onChange={(event) => setSubmittedAnswer(event.target.value)}/></label>{answerError && <div className="notice">{answerError}</div>}<button className="submit-button" disabled={submitting} type="submit">{submitting ? '제출 중...' : '정답 제출하기'} <span>↗</span></button></form>}<div className="management-actions"><button type="button" className="secondary-button share-button" onClick={() => void shareProblem()} aria-label="문제 링크 공유"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.7 10.7 6.6-4.4m-6.6 7 6.6 4.4"/></svg>공유</button><button type="button" className="secondary-button" onClick={beginEdit}>문제 수정</button><button type="button" className="danger-button" disabled={submitting} onClick={() => void deleteProblem()}>문제 삭제</button></div>{shareFeedback && <p className="share-feedback" role="status" aria-live="polite">{shareFeedback}</p>}{answerError && !unlockedExplanation && <div className="notice">{answerError}</div>}</>}</section>}</section>
         : <>
         <section className="hero">
           <div className="hero-copy"><div className="eyebrow"><span className="eyebrow-dot" /> Share · Solve · Study</div><h1>마음에 드는 문제를,<br /><em>공유해보아요.</em></h1><p>문제를 풀고 정답을 맞히면, 출제자가 남긴 해설을 확인할 수 있어요.</p><button className="hero-cta" type="button" onClick={() => navigate('/create')}>내 문제 공유하기 <span>↗</span></button></div>
