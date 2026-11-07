@@ -220,7 +220,7 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .route-composer.detail-page { width: min(100%, 820px); }
 .source-link { color: #aaaabd; font-size: 9px; transition: color .16s ease; }
 .source-link:hover { color: #6961d9; }
-.theme-toggle { display: grid !important; place-items: center; padding: 0 !important; }
+.theme-toggle { display: grid !important; place-items: center; padding: 0 !important; aspect-ratio: 1 / 1; }
 .theme-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .sort-select {
   min-width: 132px; height: 40px; appearance: none; -webkit-appearance: none;
