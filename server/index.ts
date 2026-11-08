@@ -46,6 +46,7 @@ type Store = { problems: Problem[] }
 let store: Store = { problems: [] }
 let writeQueue = Promise.resolve()
 const attempts = new Map<string, { count: number; resetAt: number }>()
+const managementAttempts = new Map<string, { count: number; resetAt: number }>()
 
 app.disable('x-powered-by')
 app.use(express.json({ limit: '25mb' }))
@@ -69,6 +70,22 @@ function limitAttempts(req: Request, res: Response) {
   }
   if (current.count >= 12) {
     res.status(429).json({ error: '정답 제출 횟수가 너무 많습니다. 5분 후 다시 시도해 주세요.' })
+    return true
+  }
+  current.count += 1
+  return false
+}
+
+function limitManagementAttempts(req: Request, res: Response) {
+  const key = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+  const now = Date.now()
+  const current = managementAttempts.get(key)
+  if (!current || current.resetAt <= now) {
+    managementAttempts.set(key, { count: 1, resetAt: now + 15 * 60 * 1000 })
+    return false
+  }
+  if (current.count >= 8) {
+    res.status(429).json({ error: '관리 암호 입력 횟수가 너무 많습니다. 15분 후 다시 시도해 주세요.' })
     return true
   }
   current.count += 1
@@ -218,6 +235,7 @@ async function authorizeManagement(problem: Problem, password: unknown) {
 }
 
 app.put('/server/problems/:id', async (req: Request, res: Response) => {
+  if (limitManagementAttempts(req, res)) return
   const problem = store.problems.find((item) => item.id === req.params.id)
   if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
   if (!await authorizeManagement(problem, req.body?.managementPassword)) {
@@ -237,6 +255,7 @@ app.put('/server/problems/:id', async (req: Request, res: Response) => {
 })
 
 app.delete('/server/problems/:id', async (req: Request, res: Response) => {
+  if (limitManagementAttempts(req, res)) return
   const problem = store.problems.find((item) => item.id === req.params.id)
   if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
   if (!await authorizeManagement(problem, req.body?.managementPassword)) {
