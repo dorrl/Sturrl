@@ -319,3 +319,17 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .share-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .share-feedback { margin: 9px 0 0; color: #7770d9; font-size: 11px; }
 .dark-mode .share-feedback { color: #c9c4ff; }
+
+/* SVG icon assets */
+.icon-inline { width: 16px; height: 16px; flex: 0 0 auto; object-fit: contain; vertical-align: middle; }
+.theme-toggle img { width: 19px; height: 19px; }
+.search-icon { width: 17px; height: 17px; opacity: .72; }
+.sort-chevron { fill: none; stroke: none; object-fit: contain; }
+.spark.icon-image { width: 25px; height: 25px; }
+.icon-image { display: block; object-fit: contain; }
+.card-icon.icon-image { width: 28px; height: 28px; }
+.card-check.icon-image { width: 17px; height: 17px; }
+.hero-star.icon-image { width: 22px; height: 22px; }
+.close-button .icon-inline { width: 15px; height: 15px; }
+.profile-button .icon-inline { width: 15px; height: 15px; margin-left: 6px; }
+.submit-button .icon-inline { width: 14px; height: 14px; margin-left: 10px; }
