@@ -233,7 +233,7 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .sort-select:focus-visible { outline: none !important; border-color: #8179e4; box-shadow: 0 0 0 3px #8179e426, 0 5px 16px #5e57c51a; }
 .sort-select option { color: #45465c; background: #fff; }
 .sort-chevron { position: absolute; right: 12px; width: 15px; height: 15px; fill: none; stroke: #777791; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: transform .2s ease, stroke .2s ease; }
-.sort-select-wrap:focus-within .sort-chevron { transform: translateY(1px); stroke: #7169dc; }
+.sort-select-wrap:focus-within .sort-chevron { transform: translateY(calc(-50% + 1px)); stroke: #7169dc; }
 :where(button, a, input, textarea, select, [tabindex]):focus-visible {
   outline: none !important;
   box-shadow: 0 0 0 3px #8b83ed26, 0 0 0 5px #8b83ed12, 0 8px 22px #5149b51a;
@@ -325,7 +325,7 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .theme-toggle { font-size: 20px; line-height: 1; }
 .profile-button > span { margin-left: 6px; }
 .search-icon { display: inline-flex; align-items: center; justify-content: center; width: 17px; font-size: 20px; line-height: 1; }
-.sort-chevron { position: absolute; right: 12px; width: 15px; height: 15px; display: grid; place-items: center; color: #777791; font-size: 18px; line-height: 1; pointer-events: none; }
+.sort-chevron { position: absolute; top: 50%; right: 12px; width: 15px; height: 15px; display: grid; place-items: center; color: #777791; font-size: 18px; line-height: 1; pointer-events: none; transform: translateY(-50%); }
 .spark { font-size: 24px; line-height: 1; }
 .card-icon { font-size: 25px; }
 .card-check { font-size: 15px; line-height: 1; }
