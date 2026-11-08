@@ -320,16 +320,14 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .share-feedback { margin: 9px 0 0; color: #7770d9; font-size: 11px; }
 .dark-mode .share-feedback { color: #c9c4ff; }
 
-/* SVG icon assets */
-.icon-inline { width: 16px; height: 16px; flex: 0 0 auto; object-fit: contain; vertical-align: middle; }
-.theme-toggle img { width: 19px; height: 19px; }
-.search-icon { width: 17px; height: 17px; opacity: .72; }
-.sort-chevron { fill: none; stroke: none; object-fit: contain; }
-.spark.icon-image { width: 25px; height: 25px; }
-.icon-image { display: block; object-fit: contain; }
-.card-icon.icon-image { width: 28px; height: 28px; }
-.card-check.icon-image { width: 17px; height: 17px; }
-.hero-star.icon-image { width: 22px; height: 22px; }
-.close-button .icon-inline { width: 15px; height: 15px; }
-.profile-button .icon-inline { width: 15px; height: 15px; margin-left: 6px; }
-.submit-button .icon-inline { width: 14px; height: 14px; margin-left: 10px; }
+
+/* Inline text symbols replace standalone UI icon assets */
+.theme-toggle { font-size: 20px; line-height: 1; }
+.profile-button > span { margin-left: 6px; }
+.search-icon { display: inline-flex; align-items: center; justify-content: center; width: 17px; font-size: 20px; line-height: 1; }
+.sort-chevron { position: absolute; right: 12px; width: 15px; height: 15px; display: grid; place-items: center; color: #777791; font-size: 18px; line-height: 1; pointer-events: none; }
+.spark { font-size: 24px; line-height: 1; }
+.card-icon { font-size: 25px; }
+.card-check { font-size: 15px; line-height: 1; }
+.hero-star { font-size: 22px; line-height: 1; }
+.share-button { gap: 7px; }
