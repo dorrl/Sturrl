@@ -325,7 +325,7 @@ footer { min-height: 105px; display: flex; align-items: center; justify-content:
 .theme-toggle { font-size: 20px; line-height: 1; }
 .profile-button > span { margin-left: 6px; }
 .search-icon { display: inline-flex; align-items: center; justify-content: center; width: 17px; font-size: 20px; line-height: 1; }
-.sort-chevron { position: absolute; top: 50%; right: 12px; width: 15px; height: 15px; display: grid; place-items: center; color: #777791; font-size: 18px; line-height: 1; pointer-events: none; transform: translateY(-50%); }
+.sort-chevron { position: absolute; right: 12px; width: 15px; height: 15px; display: grid; place-items: center; color: #777791; font-size: 18px; line-height: 1; pointer-events: none; transform: translateY(-50%); }
 .spark { font-size: 24px; line-height: 1; }
 .card-icon { font-size: 25px; }
 .card-check { font-size: 15px; line-height: 1; }
