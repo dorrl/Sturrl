@@ -11,7 +11,7 @@ node_modules
 dist
 dist-server
 dist-ssr
-data/*.json
+data/*
 !data/.gitkeep
 *.local
 package-lock.json
@@ -26,3 +26,5 @@ package-lock.json
 *.njsproj
 *.sln
 *.sw?
+
+.env
