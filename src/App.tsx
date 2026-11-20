@@ -99,7 +99,7 @@ function App() {
         </div>
       </div>
     </header>
-    <main id="main" className="container">
+    <main id="main" className={path === '/' ? 'container home-main' : 'container'}>
       {isLibrary ? <Library key={path} savedOnly={path === '/saved'} query={query} replaceQuery={replaceQuery} bookmarks={bookmarks} toggleBookmark={toggleBookmark} navigate={navigate} />
         : path === '/create' ? <Composer key="create" navigate={navigate} back={listPath} />
           : problemId ? <DetailPage key={path} id={problemId} navigate={navigate} back={listPath}

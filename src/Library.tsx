@@ -83,6 +83,7 @@ export function Library({ savedOnly, query, replaceQuery, bookmarks, toggleBookm
 }) {
   const [state, setState] = useState<ListState>()
   const [revision, setRevision] = useState(0)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const params = new URLSearchParams(query)
   const search = params.get('q') ?? ''
   const filters = [
@@ -91,7 +92,8 @@ export function Library({ savedOnly, query, replaceQuery, bookmarks, toggleBookm
     { label: '난이도', key: 'difficulty', values: levels.map(String) },
   ]
   const groups = filters.map((group) => ({ ...group, selected: params.getAll(group.key).filter((value) => group.values.includes(value)) }))
-  const hasFilters = groups.some((group) => group.selected.length > 0)
+  const activeFilters = groups.reduce((count, group) => count + group.selected.length, 0)
+  const hasFilters = activeFilters > 0
   const sort = params.get('sort') ?? 'newest'
 
   useEffect(() => {
@@ -132,16 +134,25 @@ export function Library({ savedOnly, query, replaceQuery, bookmarks, toggleBookm
       </div>
       <div className="library-layout">
         <aside className="filters" aria-label="문제 필터">
-          <div className="filters-heading"><strong><Icon name="filter" /> 필터</strong><button className="text-button" type="button" disabled={!hasFilters} onClick={() => {
-            groups.forEach(({ key }) => params.delete(key)); replaceQuery(params)
-          }}>초기화</button></div>
-          {groups.map(({ key, label, values, selected }) => <FilterGroup key={key} title={label} values={values} selected={selected}
-            onToggle={(value) => {
-              params.delete(key)
-              const next = selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]
-              next.forEach((item) => params.append(key, item))
+          <div className="filters-heading">
+            <strong><Icon name="filter" /> 필터</strong>
+            <button className="filter-toggle" type="button" aria-expanded={filtersOpen} aria-controls="library-filters" onClick={() => setFiltersOpen(!filtersOpen)}>
+              <Icon name="filter" /> 필터{hasFilters ? ' (' + activeFilters + ')' : ''} <Icon name="chevron" />
+            </button>
+            <button className="text-button" type="button" disabled={!hasFilters} onClick={() => {
+              groups.forEach(({ key }) => params.delete(key))
               replaceQuery(params)
-            }} onClear={() => setParam(key, '')} />)}
+            }}>초기화</button>
+          </div>
+          <div id="library-filters" className={'filter-content' + (filtersOpen ? ' is-open' : '')}>
+            {groups.map(({ key, label, values, selected }) => <FilterGroup key={key} title={label} values={values} selected={selected}
+              onToggle={(value) => {
+                params.delete(key)
+                const next = selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]
+                next.forEach((item) => params.append(key, item))
+                replaceQuery(params)
+              }} onClear={() => setParam(key, '')} />)}
+          </div>
         </aside>
         <div className="results">
           <div className="results-toolbar">
