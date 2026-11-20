@@ -1,27 +1,28 @@
-import express, { type Request, type Response } from 'express'
+import express, { type ErrorRequestHandler, type Request, type RequestHandler, type Response } from 'express'
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createServer as createViteServer } from 'vite'
 import { hash, verify } from '@node-rs/argon2'
 
 const scrypt = promisify(scryptCallback)
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-// Node does not load .env files automatically. Load the project-local file before reading configuration.
 if (existsSync(resolve(rootDir, '.env'))) process.loadEnvFile(resolve(rootDir, '.env'))
+
 const app = express()
-const port = Number(process.env.PORT ?? 3000)
+const port = Number(process.env.PORT || 3000)
 const isProduction = process.env.NODE_ENV === 'production' || dirname(fileURLToPath(import.meta.url)).endsWith('dist-server')
-const dataDir = resolve(rootDir, 'data')
+const dataDir = resolve(rootDir, process.env.STURRL_DATA_DIR || 'data')
 const dataFile = resolve(dataDir, 'problems.json')
-const answerPepper = process.env.ANSWER_PEPPER ?? 'sturrl-development-only-change-this-before-deploying'
-const subjects = ['국어', '영어', '수학', '사회', '과학', '한국사']
-const grades = ['중1', '중2', '중3', '고1', '고2', '고3', '대학생']
+const configuredPepper = process.env.ANSWER_PEPPER
+const answerPepper = configuredPepper ?? 'sturrl-development-only-change-this-before-deploying'
+const subjects = ['국어', '영어', '수학', '사회', '과학', '한국사', '기타']
+const grades = ['중1', '중2', '중3', '고1', '고2', '고3', '대학생', '기타']
 const difficulties = [1, 2, 3, 4, 5]
 const argon2Options = { algorithm: 2, memoryCost: 19456, timeCost: 2, parallelism: 1 } as const
+const masterPasswordHash = process.env.MASTER_PASSWORD_HASH?.trim()
 
 type Problem = {
   id: string
@@ -32,6 +33,8 @@ type Problem = {
   difficulty: number
   author: string
   createdAt: string
+  updatedAt?: string
+  editVersion?: number
   views: number
   solvedBy: string[]
   correctSubmissions: number
@@ -40,258 +43,398 @@ type Problem = {
   answerVerifier: string
   managementPasswordHash?: string
   photos?: string[]
+  ratings?: Record<string, number>
   explanation: { iv: string; tag: string; ciphertext: string }
 }
-type Store = { problems: Problem[] }
-let store: Store = { problems: [] }
-let writeQueue = Promise.resolve()
-const attempts = new Map<string, { count: number; resetAt: number }>()
-const managementAttempts = new Map<string, { count: number; resetAt: number }>()
+
+let problems: Problem[] = []
+let writeQueue: Promise<unknown> = Promise.resolve()
+class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message) }
+}
 
 app.disable('x-powered-by')
-app.use(express.json({ limit: '25mb' }))
+if (process.env.TRUST_PROXY_HOPS) {
+  const hops = Number(process.env.TRUST_PROXY_HOPS)
+  if (!Number.isSafeInteger(hops) || hops < 1) throw new Error('TRUST_PROXY_HOPS must be a positive integer.')
+  app.set('trust proxy', hops)
+}
+app.use((_req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+  })
+  if (isProduction) {
+    res.set('Content-Security-Policy', "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:")
+  }
+  next()
+})
 
-function getVisitorId(req: Request, res: Response) {
-  const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith('sturrl_visitor='))
-  const existing = cookie?.slice('sturrl_visitor='.length)
-  if (existing && /^[a-f0-9]{36}$/i.test(existing)) return existing
-  const id = randomBytes(18).toString('hex')
-  res.setHeader('Set-Cookie', `sturrl_visitor=${id}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isProduction ? '; Secure' : ''}`)
-  return id
+app.use('/server', (req, res, next) => {
+  res.set('Cache-Control', 'no-store')
+  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+    if (req.get('Sec-Fetch-Site') === 'cross-site') return next(new ApiError(403, '이 페이지에서 다시 요청해 주세요.'))
+    if (!req.is('application/json')) return next(new ApiError(415, 'JSON 형식으로 요청해 주세요.'))
+  }
+  next()
+})
+const smallJson = express.json({ limit: '8kb' })
+const problemJson = express.json({ limit: '25mb' })
+
+function rateLimit(limit: number, minutes: number, message: string): RequestHandler {
+  const buckets = new Map<string, { count: number; resetAt: number }>()
+  const window = minutes * 60_000
+  let sweepAt = 0
+
+  return (req, res, next) => {
+    const now = Date.now()
+    if (now >= sweepAt) {
+      for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key)
+      sweepAt = now + 60_000
+    }
+    const key = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    const current = buckets.get(key)
+    if (!current || current.resetAt <= now) {
+      buckets.set(key, { count: 1, resetAt: now + window })
+    } else if (current.count >= limit) {
+      res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)))
+      return next(new ApiError(429, message))
+    } else {
+      current.count += 1
+    }
+    next()
+  }
 }
 
-function limitAttempts(req: Request, res: Response) {
-  const key = req.ip ?? req.socket.remoteAddress ?? 'unknown'
-  const now = Date.now()
-  const current = attempts.get(key)
-  if (!current || current.resetAt <= now) {
-    attempts.set(key, { count: 1, resetAt: now + 5 * 60 * 1000 })
-    return false
-  }
-  if (current.count >= 12) {
-    res.status(429).json({ error: '정답 제출 횟수가 너무 많습니다. 5분 후 다시 시도해 주세요.' })
-    return true
-  }
-  current.count += 1
-  return false
+const limitAnswer = rateLimit(12, 5, '정답 제출 횟수가 너무 많아요. 잠시 후 다시 시도해 주세요.')
+const limitManagement = rateLimit(8, 15, '관리 요청이 너무 많아요. 잠시 후 다시 시도해 주세요.')
+const limitCreate = rateLimit(8, 15, '문제 등록 요청이 너무 많아요. 잠시 후 다시 시도해 주세요.')
+const limitReview = rateLimit(20, 5, '리뷰 요청이 너무 많아요. 잠시 후 다시 시도해 주세요.')
+
+const visitorCookie = 'sturrl_visitor'
+const visitorPattern = /^[a-f0-9]{36}$/
+function signVisitor(id: string) {
+  return createHmac('sha256', answerPepper).update('sturrl-visitor-v1:').update(id).digest()
 }
 
-function limitManagementAttempts(req: Request, res: Response) {
-  const key = req.ip ?? req.socket.remoteAddress ?? 'unknown'
-  const now = Date.now()
-  const current = managementAttempts.get(key)
-  if (!current || current.resetAt <= now) {
-    managementAttempts.set(key, { count: 1, resetAt: now + 15 * 60 * 1000 })
-    return false
-  }
-  if (current.count >= 8) {
-    res.status(429).json({ error: '관리 암호 입력 횟수가 너무 많습니다. 15분 후 다시 시도해 주세요.' })
-    return true
-  }
-  current.count += 1
-  return false
+function visitorFrom(req: Request, allowLegacy = false) {
+  const prefix = visitorCookie + '='
+  const cookie = req.headers.cookie?.split(';').map((part) => part.trim()).find((part) => part.startsWith(prefix))
+  const [id, signature, extra] = cookie?.slice(prefix.length).split('.') ?? []
+  if (!id || !visitorPattern.test(id) || extra !== undefined) return undefined
+  if (signature === undefined) return allowLegacy ? id : undefined
+  if (/^[a-f0-9]{64}$/.test(signature) && timingSafeEqual(signVisitor(id), Buffer.from(signature, 'hex'))) return id
+  return undefined
+}
+
+function setVisitor(req: Request, res: Response, id: string) {
+  const token = id + '.' + signVisitor(id).toString('hex')
+  res.cookie(visitorCookie, token, { httpOnly: true, sameSite: 'lax', secure: req.secure || isProduction, path: '/', maxAge: 31_536_000_000 })
+}
+
+function viewerFor(problem: Problem, visitor?: string) {
+  return { solved: !!visitor && problem.solvedBy.includes(visitor), rating: visitor ? problem.ratings?.[visitor] ?? null : null }
 }
 
 async function deriveKeys(answer: string, salt: Buffer) {
-  return await scrypt(`${answer.normalize('NFKC').trim().toLocaleLowerCase('ko-KR')}:${answerPepper}`, salt, 64) as Buffer
+  return await scrypt(answer.normalize('NFKC').trim().toLocaleLowerCase('ko-KR') + ':' + answerPepper, salt, 64) as Buffer
 }
 
 function publicProblem(problem: Problem, includePhotos = false) {
-  const { answerSalt: _salt, answerVerifier: _verifier, managementPasswordHash: _managementHash, explanation: _explanation, solvedBy, photos, ...safe } = problem
-  return { ...safe, attempts: Number.isFinite(problem.attempts) ? problem.attempts : problem.correctSubmissions, ...(includePhotos && photos ? { photos } : {}), solvedCount: Array.isArray(solvedBy) ? solvedBy.length : 0 }
+  const ratings = Object.values(problem.ratings ?? {})
+  return {
+    id: problem.id, title: problem.title, description: problem.description, subject: problem.subject,
+    grade: problem.grade, difficulty: problem.difficulty, author: problem.author, createdAt: problem.createdAt,
+    updatedAt: problem.updatedAt, views: problem.views, solvedCount: problem.solvedBy.length,
+    correctSubmissions: problem.correctSubmissions, attempts: problem.attempts ?? problem.correctSubmissions,
+    photoCount: problem.photos?.length ?? 0, ...(includePhotos ? { photos: problem.photos ?? [] } : {}),
+    reviewCount: ratings.length,
+    averageRating: ratings.length ? ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length : null,
+  }
 }
 
-async function persist() {
-  writeQueue = writeQueue.then(() => writeFile(dataFile, JSON.stringify(store, null, 2), 'utf8'))
-  await writeQueue
+async function save(next: Problem[]) {
+  const temporary = dataFile + '.' + randomBytes(8).toString('hex') + '.tmp'
+  try {
+    await writeFile(temporary, JSON.stringify({ problems: next }, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx', flush: true })
+    await rename(temporary, dataFile)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
-function validPhotos(value: unknown) {
-  if (value === undefined) return true
-  return Array.isArray(value) && value.length <= 5 && value.every((photo) =>
-    typeof photo === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/.test(photo) && photo.length <= 4_200_000,
-  )
+function commit<T>(change: (current: Problem[]) => { next: Problem[]; result: T }): Promise<T> {
+  const operation = writeQueue.then(async () => {
+    const { next, result } = change(problems)
+    if (next !== problems) {
+      await save(next)
+      problems = next
+    }
+    return result
+  })
+  writeQueue = operation.catch(() => {})
+  return operation
 }
 
-function validProblemFields(body: any) {
-  const { title, description, subject, grade, difficulty, author, answer, explanation } = body ?? {}
-  return typeof title === 'string' && title.trim().length >= 3 && title.trim().length <= 120 &&
-    typeof description === 'string' && description.trim().length <= 5000 &&
-    subjects.includes(subject) && grades.includes(grade) && difficulties.includes(Number(difficulty)) &&
-    typeof author === 'string' && author.trim().length > 0 && author.trim().length <= 30 &&
-    typeof answer === 'string' && answer.trim().length > 0 && answer.trim().length <= 200 &&
-    typeof explanation === 'string' && explanation.trim().length <= 10000 && validPhotos(body?.photos)
+function findProblem(id: string | string[], items = problems) {
+  const problem = items.find((item) => item.id === id)
+  if (!problem) throw new ApiError(404, '문제를 찾을 수 없어요.')
+  return problem
+}
+
+function updateProblem<T extends Problem | null>(id: string | string[], change: (current: Problem) => T) {
+  return commit((items) => {
+    const current = findProblem(id, items)
+    const result = change(current)
+    const next = result === current ? items : result
+      ? items.map((item) => item === current ? result : item)
+      : items.filter((item) => item !== current)
+    return { next, result }
+  })
+}
+
+function ensureSameVersion(initial: Problem, current: Problem) {
+  if (initial.answerSalt !== current.answerSalt || initial.editVersion !== current.editVersion) {
+    throw new ApiError(409, '문제가 수정됐어요. 페이지를 새로고침한 뒤 다시 시도해 주세요.')
+  }
+}
+
+function validPhoto(photo: unknown): photo is string {
+  if (typeof photo !== 'string' || photo.length > 4_200_000) return false
+  const header = /^data:image\/(jpeg|png|webp);base64,/.exec(photo)
+  if (!header) return false
+  const encoded = photo.slice(header[0].length)
+  if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return false
+  const bytes = Buffer.from(encoded.slice(0, 16), 'base64')
+  if (header[1] === 'jpeg') return bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))
+  if (header[1] === 'png') return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  return bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+}
+
+function problemFields(body: unknown) {
+  const fields = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {}
+  const { title, description, subject, grade, difficulty, author, answer, explanation, photos } = fields
+  const level = typeof difficulty === 'number' || typeof difficulty === 'string' ? Number(difficulty) : NaN
+  let solution: { answer: string; explanation: string } | undefined
+  if (answer !== undefined || explanation !== undefined) {
+    if (typeof answer !== 'string' || !answer.trim() || answer.trim().length > 200 ||
+      typeof explanation !== 'string' || explanation.trim().length > 10000) {
+      throw new ApiError(400, '문제의 정답과 해설을 확인해 주세요.')
+    }
+    solution = { answer: answer.trim(), explanation }
+  }
+  if (
+    typeof title !== 'string' || title.trim().length < 3 || title.trim().length > 120 ||
+    typeof description !== 'string' || description.trim().length > 5000 ||
+    typeof subject !== 'string' || !subjects.includes(subject) || typeof grade !== 'string' || !grades.includes(grade) ||
+    !difficulties.includes(level) || typeof author !== 'string' || !author.trim() || author.trim().length > 30 ||
+    (photos !== undefined && (!Array.isArray(photos) || photos.length > 5 || !photos.every(validPhoto)))
+  ) throw new ApiError(400, '문제 정보, 정답과 첨부 사진을 확인해 주세요.')
+  return { fields: { title: title.trim(), description: description.trim(), subject, grade, difficulty: level, author: author.trim(), photos }, solution }
 }
 
 async function buildAnswerMaterial(answer: string, explanation: string) {
-  const answerSalt = randomBytes(16)
-  const keys = await deriveKeys(answer, answerSalt)
-  const answerVerifier = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
+  const salt = randomBytes(16)
+  const keys = await deriveKeys(answer, salt)
+  const verifier = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest('base64')
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', keys.subarray(0, 32), iv)
   const ciphertext = Buffer.concat([cipher.update(explanation, 'utf8'), cipher.final()])
   return {
-    answerSalt: answerSalt.toString('base64'),
-    answerVerifier: answerVerifier.toString('base64'),
+    answerSalt: salt.toString('base64'),
+    answerVerifier: verifier,
     explanation: { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') },
   }
 }
 
-app.get('/server/health', (_req: Request, res: Response) => {
+app.get('/server/health', (_req, res) => {
   res.json({ ok: true, service: 'sturrl-api', timestamp: new Date().toISOString() })
 })
 
-app.get('/server/problems', (req: Request, res: Response) => {
+app.get('/server/problems', (req, res) => {
   const { subject, grade, difficulty, sort = 'newest', q = '' } = req.query
   const toFilterList = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value])
     .filter((item): item is string => typeof item === 'string' && item.length > 0)
   const subjectFilters = toFilterList(subject)
   const gradeFilters = toFilterList(grade)
   const difficultyFilters = toFilterList(difficulty).map(Number).filter((item) => difficulties.includes(item))
-  const sortBy = typeof sort === 'string' ? sort : 'newest'
-  const query = typeof q === 'string' ? q.toLocaleLowerCase('ko-KR') : ''
-  let items = store.problems.filter((problem): problem is Problem => Boolean(problem && typeof problem === 'object' && problem.id)).filter((problem) => (!subjectFilters.length || subjectFilters.includes(problem.subject)) &&
-    (!gradeFilters.length || gradeFilters.includes(problem.grade)) && (!difficultyFilters.length || difficultyFilters.includes(problem.difficulty)) &&
-    (!query || `${problem.title} ${problem.description} ${problem.author}`.toLocaleLowerCase('ko-KR').includes(query)))
-  items = [...items].sort((a, b) => {
-    if (sortBy === 'views') return b.views - a.views
-    if (sortBy === 'solved') return b.solvedBy.length - a.solvedBy.length
-    if (sortBy === 'correct') return b.correctSubmissions - a.correctSubmissions
-    if (sortBy === 'difficulty') return b.difficulty - a.difficulty
+  const query = typeof q === 'string' ? q.trim().slice(0, 120).toLocaleLowerCase('ko-KR') : ''
+  const items = problems.filter((problem) =>
+    (!subjectFilters.length || subjectFilters.includes(problem.subject)) &&
+    (!gradeFilters.length || gradeFilters.includes(problem.grade)) &&
+    (!difficultyFilters.length || difficultyFilters.includes(problem.difficulty)) &&
+    (!query || (problem.title + ' ' + problem.description + ' ' + problem.author).toLocaleLowerCase('ko-KR').includes(query)),
+  )
+  items.sort((a, b) => {
+    if (sort === 'views') return b.views - a.views
+    if (sort === 'solved') return b.solvedBy.length - a.solvedBy.length
+    if (sort === 'correct') return b.correctSubmissions - a.correctSubmissions
+    if (sort === 'difficulty') return b.difficulty - a.difficulty
     return b.createdAt.localeCompare(a.createdAt)
   })
-  const correctSubmissions = store.problems.reduce((sum, problem) => sum + (Number.isFinite(problem.correctSubmissions) ? problem.correctSubmissions : 0), 0)
-  res.json({ items: items.map((problem) => publicProblem(problem)), total: items.length, stats: { correctSubmissions } })
+  const correctSubmissions = problems.reduce((sum, problem) => sum + problem.correctSubmissions, 0)
+  res.json({ items: items.map((problem) => publicProblem(problem)), total: items.length, stats: { problemCount: problems.length, correctSubmissions } })
 })
 
-app.post('/server/problems', async (req: Request, res: Response) => {
-  const { title, description, subject, grade, difficulty, author, answer, explanation, managementPassword, photos } = req.body ?? {}
-  if (!validProblemFields(req.body) || typeof managementPassword !== 'string' || managementPassword.length < 8 || managementPassword.length > 256) {
-    res.status(400).json({ error: '문제 정보와 관리 암호(8자 이상)를 올바르게 입력해 주세요.' })
-    return
+app.post('/server/problems', limitCreate, problemJson, async (req, res) => {
+  const { fields, solution } = problemFields(req.body)
+  const password: unknown = req.body?.managementPassword
+  if (typeof password !== 'string' || password.trim().length < 8 || password.length > 256) {
+    throw new ApiError(400, '관리 암호를 8자 이상 입력해 주세요.')
   }
-  const answerMaterial = await buildAnswerMaterial(answer, explanation)
-  const managementPasswordHash = await hash(managementPassword, argon2Options)
+  if (!solution) throw new ApiError(400, '문제의 정답을 입력해 주세요.')
+  const material = await buildAnswerMaterial(solution.answer, solution.explanation)
+  const managementPasswordHash = await hash(password, argon2Options)
   const problem: Problem = {
-    id: randomBytes(12).toString('hex'), title: title.trim(), description: description.trim(), subject, grade,
-    difficulty: Number(difficulty), author: author.trim(), createdAt: new Date().toISOString(), views: 0,
-    solvedBy: [], attempts: 0, correctSubmissions: 0, ...answerMaterial, managementPasswordHash, photos: photos ?? [],
+    ...fields, ...material, managementPasswordHash, id: randomBytes(12).toString('hex'),
+    createdAt: new Date().toISOString(), views: 0, solvedBy: [], attempts: 0, correctSubmissions: 0,
   }
-  store.problems.unshift(problem)
-  await persist()
+  await commit((items) => ({ next: [problem, ...items], result: undefined }))
   res.status(201).json({ item: publicProblem(problem, true) })
 })
 
-app.get('/server/problems/:id', async (req: Request, res: Response) => {
-  const problem = store.problems.find((item) => item.id === req.params.id)
-  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
-  problem.views += 1
-  await persist()
-  res.json({ item: publicProblem(problem, true) })
+app.get('/server/problems/:id', async (req, res) => {
+  const problem = await updateProblem(req.params.id, (current) => ({ ...current, views: current.views + 1 }))
+  res.json({ item: publicProblem(problem, true), viewer: viewerFor(problem, visitorFrom(req)) })
 })
 
-app.post('/server/problems/:id/answer', async (req: Request, res: Response) => {
-  if (limitAttempts(req, res)) return
-  const problem = store.problems.find((item) => item.id === req.params.id)
-  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
-  const answer = req.body?.answer
-  if (typeof answer !== 'string' || answer.length > 200) { res.status(400).json({ error: '정답을 입력해 주세요.' }); return }
-  problem.attempts = (problem.attempts ?? problem.correctSubmissions ?? 0) + 1
-  const keys = await deriveKeys(answer, Buffer.from(problem.answerSalt, 'base64'))
+app.post('/server/problems/:id/answer', limitAnswer, smallJson, async (req, res) => {
+  const initial = findProblem(req.params.id)
+  const answer: unknown = req.body?.answer
+  if (typeof answer !== 'string' || !answer.trim() || answer.trim().length > 200) throw new ApiError(400, '정답을 입력해 주세요.')
+  const keys = await deriveKeys(answer, Buffer.from(initial.answerSalt, 'base64'))
   const candidate = createHmac('sha256', keys.subarray(32)).update('sturrl-answer-verifier-v1').digest()
-  const expected = Buffer.from(problem.answerVerifier, 'base64')
+  const expected = Buffer.from(initial.answerVerifier, 'base64')
   const correct = candidate.length === expected.length && timingSafeEqual(candidate, expected)
-  if (!correct) {
-    await persist()
-    res.json({ correct: false, attempts: problem.attempts, error: '정답이 아닙니다. 다시 생각해 보세요.' })
-    return
+  const knownVisitor = visitorFrom(req)
+  const legacyVisitor = visitorFrom(req, true)
+  const visitor = correct ? knownVisitor ?? legacyVisitor ?? randomBytes(18).toString('hex') : undefined
+  let explanation: string | undefined
+  if (correct) {
+    const encrypted = initial.explanation
+    const decipher = createDecipheriv('aes-256-gcm', keys.subarray(0, 32), Buffer.from(encrypted.iv, 'base64'))
+    decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'))
+    explanation = Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, 'base64')), decipher.final()]).toString('utf8')
   }
-  problem.correctSubmissions += 1
-  const visitorId = getVisitorId(req, res)
-  if (!problem.solvedBy.includes(visitorId)) problem.solvedBy.push(visitorId)
-  const encrypted = problem.explanation
-  const decipher = createDecipheriv('aes-256-gcm', keys.subarray(0, 32), Buffer.from(encrypted.iv, 'base64'))
-  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'))
-  const explanation = Buffer.concat([decipher.update(Buffer.from(encrypted.ciphertext, 'base64')), decipher.final()]).toString('utf8')
-  await persist()
-  res.json({ correct: true, explanation, solvedCount: problem.solvedBy.length, attempts: problem.attempts, correctSubmissions: problem.correctSubmissions })
+  const problem = await updateProblem(req.params.id, (current) => {
+    ensureSameVersion(initial, current)
+    const attempts = (current.attempts ?? current.correctSubmissions) + 1
+    if (!correct || !visitor) return { ...current, attempts }
+    const solvedBy = current.solvedBy.includes(visitor) ? current.solvedBy : [...current.solvedBy, visitor]
+    return { ...current, attempts, solvedBy, correctSubmissions: current.correctSubmissions + 1 }
+  })
+  if (correct && visitor && !knownVisitor) setVisitor(req, res, visitor)
+  res.json({
+    correct, explanation, attempts: problem.attempts, solvedCount: problem.solvedBy.length,
+    correctSubmissions: problem.correctSubmissions,
+    ...(correct ? { viewer: viewerFor(problem, visitor) } : { error: '정답이 아니에요. 다시 생각해 보세요.' }),
+  })
+})
+
+app.put('/server/problems/:id/review', limitReview, smallJson, async (req, res) => {
+  const rating: unknown = req.body?.rating
+  if (rating !== null && (typeof rating !== 'number' || !difficulties.includes(rating))) {
+    throw new ApiError(400, '1점부터 5점까지 별점을 선택해 주세요.')
+  }
+  const visitor = visitorFrom(req)
+  if (!visitor) throw new ApiError(403, '문제를 푼 뒤 별점을 남길 수 있어요.')
+  const problem = await updateProblem(req.params.id, (current) => {
+    if (!current.solvedBy.includes(visitor)) throw new ApiError(403, '문제를 푼 뒤 별점을 남길 수 있어요.')
+    if ((current.ratings?.[visitor] ?? null) === rating) return current
+    const ratings = { ...current.ratings }
+    if (rating === null) delete ratings[visitor]
+    else ratings[visitor] = rating
+    return { ...current, ratings }
+  })
+  const { reviewCount, averageRating } = publicProblem(problem)
+  res.json({ reviewCount, averageRating, viewer: viewerFor(problem, visitor) })
 })
 
 async function authorizeManagement(problem: Problem, password: unknown) {
-  if (typeof password !== 'string' || password.length < 1 || password.length > 256) return false
-
-  // MASTER_PASSWORD_HASH is an Argon2id PHC string loaded from the host environment or .env.
-  const masterPasswordHash = process.env.MASTER_PASSWORD_HASH?.trim()
-  if (masterPasswordHash) {
-    try {
-      if (await verify(masterPasswordHash, password)) return true
-    } catch {
-      // A malformed master hash must not prevent the problem-specific password check.
-    }
+  if (typeof password !== 'string' || !password.length || password.length > 256) return false
+  for (const digest of [problem.managementPasswordHash, masterPasswordHash]) {
+    if (digest && await verify(digest, password).catch(() => false)) return true
   }
-
-  if (!problem.managementPasswordHash) return false
-  try { return await verify(problem.managementPasswordHash, password) } catch { return false }
+  return false
 }
 
-app.put('/server/problems/:id', async (req: Request, res: Response) => {
-  if (limitManagementAttempts(req, res)) return
-  const problem = store.problems.find((item) => item.id === req.params.id)
-  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
-  if (!await authorizeManagement(problem, req.body?.managementPassword)) {
-    res.status(403).json({ error: '관리 암호가 올바르지 않습니다.' }); return
-  }
-  const { title, description, subject, grade, difficulty, author, answer, explanation } = req.body ?? {}
-  if (!validProblemFields(req.body)) {
-    res.status(400).json({ error: '수정할 문제 정보, 정답, 해설을 올바르게 입력해 주세요.' }); return
-  }
-  const answerMaterial = await buildAnswerMaterial(answer, explanation)
-  Object.assign(problem, {
-    title: title.trim(), description: description.trim(), subject, grade, difficulty: Number(difficulty),
-    author: author.trim(), ...answerMaterial, photos: req.body.photos ?? problem.photos ?? [], updatedAt: new Date().toISOString(),
+app.put('/server/problems/:id', limitManagement, problemJson, async (req, res) => {
+  const initial = findProblem(req.params.id)
+  if (!await authorizeManagement(initial, req.body?.managementPassword)) throw new ApiError(403, '관리 암호가 올바르지 않아요.')
+  const { fields, solution } = problemFields(req.body)
+  const material = solution ? await buildAnswerMaterial(solution.answer, solution.explanation) : undefined
+  const problem = await updateProblem(req.params.id, (current) => {
+    ensureSameVersion(initial, current)
+    return {
+      ...current, ...fields, ...material, photos: fields.photos ?? current.photos,
+      updatedAt: new Date().toISOString(), editVersion: (current.editVersion ?? 0) + 1,
+    }
   })
-  await persist()
-  res.json({ item: publicProblem(problem, true) })
+  res.json({ item: publicProblem(problem, true), viewer: viewerFor(problem, visitorFrom(req)) })
 })
 
-app.delete('/server/problems/:id', async (req: Request, res: Response) => {
-  if (limitManagementAttempts(req, res)) return
-  const problem = store.problems.find((item) => item.id === req.params.id)
-  if (!problem) { res.status(404).json({ error: '문제를 찾을 수 없습니다.' }); return }
-  if (!await authorizeManagement(problem, req.body?.managementPassword)) {
-    res.status(403).json({ error: '관리 암호가 올바르지 않습니다.' }); return
-  }
-  store.problems = store.problems.filter((item) => item.id !== problem.id)
-  await persist()
+app.delete('/server/problems/:id', limitManagement, smallJson, async (req, res) => {
+  const initial = findProblem(req.params.id)
+  if (!await authorizeManagement(initial, req.body?.managementPassword)) throw new ApiError(403, '관리 암호가 올바르지 않아요.')
+  await updateProblem(req.params.id, (current) => {
+    ensureSameVersion(initial, current)
+    return null
+  })
   res.status(204).end()
 })
 
+app.use('/server', (_req, _res, next) => next(new ApiError(404, '요청한 주소를 찾을 수 없어요.')))
+const apiErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
+  if (res.headersSent) return next(error)
+  if (error instanceof ApiError) {
+    res.status(error.status).json({ error: error.message })
+  } else if (error?.status === 413) {
+    res.status(413).json({ error: '첨부 파일 용량을 줄인 뒤 다시 시도해 주세요.' })
+  } else if (error?.status === 400 || error?.status === 415) {
+    res.status(error.status).json({ error: '요청 형식을 확인해 주세요.' })
+  } else {
+    console.error('[Sturrl] Request failed:', error instanceof Error ? error.message : 'Unknown error')
+    res.status(500).json({ error: '서버에서 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.' })
+  }
+}
+app.use('/server', apiErrorHandler)
+
 async function start() {
+  if (isProduction && !configuredPepper?.trim()) throw new Error('Set ANSWER_PEPPER before starting Sturrl in production.')
   await mkdir(dataDir, { recursive: true })
   try {
-    const parsed = JSON.parse(await readFile(dataFile, 'utf8')) as Partial<Store>
-    store = {
-      problems: Array.isArray(parsed.problems)
-        ? parsed.problems.filter((problem): problem is Problem => Boolean(problem && typeof problem === 'object' && typeof problem.id === 'string'))
-        : [],
+    const parsed: unknown = JSON.parse(await readFile(dataFile, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || !('problems' in parsed) || !Array.isArray(parsed.problems)) {
+      throw new Error('Invalid problem data. Restore problems.json before starting Sturrl.')
     }
+    problems = parsed.problems.filter((item): item is Problem => !!item && typeof item.id === 'string')
+      .map((problem) => ({
+        ...problem, solvedBy: Array.isArray(problem.solvedBy) ? problem.solvedBy : [],
+        views: Number.isFinite(problem.views) ? problem.views : 0,
+        correctSubmissions: Number.isFinite(problem.correctSubmissions) ? problem.correctSubmissions : 0,
+      }))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    await persist()
+    await save([])
   }
-  if (process.env.ANSWER_PEPPER === undefined) console.warn('[Sturrl] ANSWER_PEPPER is not set; using development fallback. Set a strong secret in production.')
+  if (configuredPepper === undefined) console.warn('[Sturrl] ANSWER_PEPPER is not set. Using the development fallback.')
   if (isProduction) {
     const clientDir = resolve(rootDir, 'dist')
     app.use(express.static(clientDir))
     app.get(/.*/, (_req, res) => res.sendFile(resolve(clientDir, 'index.html')))
   } else {
-    const vite = await createViteServer({ configFile: resolve(rootDir, 'vite.config.ts'), root: rootDir, server: { middlewareMode: true }, appType: 'spa' })
+    const { createServer } = await import('vite')
+    const vite = await createServer({
+      configFile: resolve(rootDir, 'vite.config.ts'), root: rootDir, appType: 'spa',
+      server: { middlewareMode: true, fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/data/**', dataDir.replaceAll('\\', '/') + '/**'] } },
+    })
     app.use(vite.middlewares)
   }
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`[Sturrl] Server ready at http://localhost:${port}`)
-    console.log(`[Sturrl] API available at http://localhost:${port}/server/`)
-    if (!isProduction) console.log('[Sturrl] Vite HMR enabled')
+  app.listen(port, process.env.STURRL_HOST || '0.0.0.0', () => {
+    console.log('[Sturrl] Server ready at http://localhost:' + port)
   })
 }
 start().catch((error: unknown) => { console.error('[Sturrl] Failed to start:', error); process.exit(1) })
